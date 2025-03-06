@@ -1,0 +1,3 @@
+[submodule "sparsify"]
+	path = sparsify
+	url = https://github.com/EleutherAI/sparsify.git
