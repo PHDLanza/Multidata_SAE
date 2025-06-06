@@ -129,55 +129,46 @@ def questions_routine_llava(texts_list:List,modality:str='visual'):
         List: A list containing the formatted prompt string for the model.
     """ 
     if modality=='visual':
-        if modality=='visual':
-            GUIDELINES = """ 
-                [REQUIREMENTS]
-                    Focus only on the highlighted region in each image. If no region is highlighted or if the highlighted region is minimal (e.g., a few bright spots), ignore the image.
+    
+        GUIDELINES = """ 
+            [REQUIREMENTS]
+                Focus only on the highlighted region in each image. If no region is highlighted or if the highlighted region is minimal (e.g., a few bright spots), ignore the image.
+            
+                Identify common visual patterns, objects, or concepts in the activated regions. For example, note if highlighted areas show consistent structures, such as mesh patterns or similar objects.\
+            
+            [GUIDELINES]
+            Consider Text Context: While maintaining primary focus on the highlighted regions in images, you may marginally consider the associated text (questions and answers) to support or refine your visual observations. 
+            However, the final concept should be predominantly based on visual patterns.
+                Concise Description Only: Provide a short, direct description of the common features within the highlighted regions. Avoid any interpretive language—simply state what you see, such as “mesh-like structures” or “actions related to joy or happiness”
+            
+            1. Describe Only the Highlighted Regions: Generate captions solely based on the highlighted regions. If no meaningful pattern is visible, or if only a few scattered spots are highlighted,
+                output: \"Concept:  `No visual concept`\"
                 
-                    Identify common visual patterns, objects, or concepts in the activated regions. For example, note if highlighted areas show consistent structures, such as mesh patterns or similar objects.\
+            2. Consider Text Context: While maintaining primary focus on the highlighted regions in images, you may marginally consider the associated text (questions and answers) to support or refine your visual observations. However, the final concept should be predominantly based on visual patterns.
                 
-                [GUIDELINES]
-                Consider Text Context: While maintaining primary focus on the highlighted regions in images, you may marginally consider the associated text (questions and answers) to support or refine your visual observations. 
-                However, the final concept should be predominantly based on visual patterns.
-                    Concise Description Only: Provide a short, direct description of the common features within the highlighted regions. Avoid any interpretive language—simply state what you see, such as “mesh-like structures” or “actions related to joy or happiness”
-                
-                1. Describe Only the Highlighted Regions: Generate captions solely based on the highlighted regions. If no meaningful pattern is visible, or if only a few scattered spots are highlighted,
-                    output: \"Concept:  `No visual concept`\"
-                    
-                2. Consider Text Context: While maintaining primary focus on the highlighted regions in images, you may marginally consider the associated text (questions and answers) to support or refine your visual observations. However, the final concept should be predominantly based on visual patterns.
-                    
-                3. Concise Description Only: Provide a short, direct description of the common features within the highlighted regions. Avoid any interpretive language—simply state what you see, such as “mesh-like structures” or “actions related to joy or happiness”
-
-                4. Output Format: Begin each response Ensure the last line of your output follows this format.
-
-           
-            """
+            3. Concise Description Only: Provide a short, direct description of the common features within the highlighted regions.
+              Avoid any interpretive language—simply state what you see, such as “mesh-like structures” or “actions related to joy or happiness”
+        """
     else:
         GUIDELINES=""" 
             [REQUIREMENTS]
+               Focus only on the text content provided with each example. If the text is missing, irrelevant, or extremely minimal (e.g., a few unrelated words), ignore that example.
 
-                Focus only on the text content provided with each example. If the text is missing, irrelevant, or extremely minimal (e.g., a few unrelated words), ignore that example.
+            Identify common themes, objects, or concepts mentioned across the text snippets. Pay special attention to any highlighted word in each text—this word should be treated as the most important cue for concept identification.
 
-                Identify common themes, objects, or concepts mentioned across the text snippets. Pay special attention to any highlighted word in each text—this word should be treated as the most important cue for concept identification.
+        [GUIDELINES]
 
-            [GUIDELINES]
+          1.You will receive a series of text snippets, sometimes accompanied by images. Only use the text, and in particular the word between parentheses, to identify the shared concept. Images should not be considered in your analysis.
+            These examples are derived from a Visual Question Answering dataset, so each text is in the form of a question or an answer.
 
-                You will receive a series of text snippets, sometimes accompanied by images. Only use the text, and in particular the highlighted word, to identify the shared concept. Images should not be considered in your analysis.
-                These examples are derived from a Visual Question Answering dataset, so each text may be in the form of a question or an answer.
+            2.Concise Description Only: Provide a short, direct description of the common concept emerging from the texts. Avoid speculation or abstract interpretation—simply state what is explicitly or implicitly repeated, especially in relation to the highlighted words (e.g., "vehicles," "cooking actions," "types of animals").
+            Use the image only for reference if absolutely necessary; the main analysis must be text-driven, with words in parentheses as priority.
 
-                Concise Description Only: Provide a short, direct description of the common concept emerging from the texts. Avoid speculation or abstract interpretation—simply state what is explicitly or implicitly repeated, especially in relation to the highlighted words (e.g., “vehicles,” “cooking actions,” “types of animals”).
-                Use the image only for reference if absolutely necessary; the main analysis must be text-driven, with highlighted words prioritized.
+            3.If no clear concept emerges from the texts (e.g., if they are too diverse or vague), write: No textual concept
 
-                If no clear concept emerges from the texts (e.g., if they are too diverse or vague), write: No textual concept.
-
-            [OUTPUT EXAMPLES]
-
-                Concept: "A tennis match"
-
-                Concept: "Descriptions of birds"
-
-                Concept: "No textual concept"
+  
             """
+
 
     GUIDELINES += """\n\n"""
     
@@ -698,7 +689,6 @@ def generate_hypotheses_image_llava(folder_dataset:Path,folder_save_embedding:Pa
                 # print(text_outputs[0])
                 conv.messages.pop()
                 conv.messages.pop()
-                print(output)
                 dictionary_hypo[neuron_number] = output
                 torch.cuda.empty_cache()
 
