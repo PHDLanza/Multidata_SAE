@@ -141,9 +141,9 @@ def vqa_extract(train_dataset:VQAXTrainDataset,device:torch.device,path_sae:Path
             actual_conversation,text_output,output=model_generation(model,actual_conversation,
                             final_question,processor,images,max_new_tokens=max_new_tokens)
         
-              # Extractthe hidden states linked with the text output, after the processing of the image (first hidden_state chunk) and before the 
+              # Extract the hidden states linked with the text output, after the processing of the image (first hidden_state chunk) and before the 
             # end of token message (last hidden_state chunk)
-            output
+          
                  
             hidden_state_text = [state[0] for state, _ in hooked_res["hidden_states"][1:-1]]
             
@@ -241,7 +241,7 @@ def model_generation(model:LlavaNextForConditionalGeneration,actual_conversation
                 image_sizes=inputs["image_sizes"].to(model.device),
                 attention_mask=inputs["attention_mask"].to(model.device),
                 max_new_tokens=max_new_tokens,
-                temperature=0.0001,
+
         )
     else:
         conversation_witout_images=[
@@ -445,7 +445,7 @@ def initialize_llava_vqa(model:LlavaNextForConditionalGeneration,actual_conversa
     return actual_conversation
 
 
-def extract_matching_neuron_values_indices(list_indices: torch.tensor, list_acts:torch.tensor, target_tensor: torch.tensor):
+def extract_matching_neuron_values_indices(indices_tensor: torch.tensor, acts_tensor:torch.tensor, target_tensor: torch.tensor):
     """
     Extract indices and activation values for neurons present in the target_tensor.
 
@@ -466,15 +466,15 @@ def extract_matching_neuron_values_indices(list_indices: torch.tensor, list_acts
     matching_values = []
     
     # Process all patches at once using torch operations
-    mask = torch.isin(list_indices, target_tensor)
+    mask = torch.isin(indices_tensor, target_tensor)
     indices_where = torch.where(mask)
     
     # Group by patch number
-    for patch_idx in range(len(list_indices)):
+    for patch_idx in range(len(indices_tensor)):
         patch_mask = indices_where[0] == patch_idx
         if patch_mask.any():
-            matching_indices.append(list_indices[patch_idx][indices_where[1][patch_mask]].tolist())
-            matching_values.append(list_acts[patch_idx][indices_where[1][patch_mask]].tolist())
+            matching_indices.append(indices_tensor[patch_idx][indices_where[1][patch_mask]].tolist())
+            matching_values.append(acts_tensor[patch_idx][indices_where[1][patch_mask]].tolist())
     
     return matching_indices, matching_values
   
@@ -549,14 +549,16 @@ def create_average_activation_dictionary_llava_next(folder_save_embedding:Path)-
         res=json.load(open(file_path))
         for key, value in res.items():
             neuron_activation_stats_dict_image=average_values_indices(value['visual_features']['latent_indices'],value['visual_features']['latent_acts'],neuron_activation_stats_dict_image,key)  
-            neuron_activation_stats_dict_text=average_values_indices(value['text_features']['latent_indices'],value['text_features']['latent_acts'],neuron_activation_stats_dict_text,key)  
+            neuron_activation_stats_dict_text=average_values_indices(value['textual_features']['latent_indices'],value['textual_features']['latent_acts'],neuron_activation_stats_dict_text,key)  
 
 
-    with open(folder_save_embedding+"average_activation_dictionary_text.json", "a") as f:
+    with open(folder_save_embedding+"average_activation_dictionary_textual.json", "a") as f:
         json.dump(neuron_activation_stats_dict_text, f, indent=4)
         
-    with open(folder_save_embedding+"average_activation_dictionary_image.json", "a") as f:
+    with open(folder_save_embedding+"average_activation_dictionary_visual.json", "a") as f:
         json.dump(neuron_activation_stats_dict_image, f, indent=4)
+        
+
 def average_values_indices(list_indices: List[List[int]], list_acts:List[List[int]],neuron_activation_stats_dict:dict,id_sample:str)->Dict:
 
     """Compute the averages activations values for all active neurons for each patch in a single image and adding to 
@@ -580,19 +582,20 @@ def average_values_indices(list_indices: List[List[int]], list_acts:List[List[in
     # Process all patches at once
     for patch_indices, patch_acts in zip(list_indices, list_acts):
         for neuron_idx, activation in zip(patch_indices, patch_acts):
-            if neuron_idx not in neuron_sums:
+            if neuron_idx not in neuron_sums.keys():
                 neuron_sums[neuron_idx] = 0.0
                 neuron_counts[neuron_idx] = 0
+                
             neuron_sums[neuron_idx] += activation
             neuron_counts[neuron_idx] += 1
 
     # Calculate averages and update stats dictionary
-    for neuron_idx in neuron_sums:
+    for key,value in neuron_sums.items():
         # Store [average_activation, patch_count]
-        avg_activation = neuron_sums[neuron_idx] / 576  # Total patches
-        neuron_activation_stats_dict[str(neuron_idx)][id_sample] = [
+        avg_activation = value / 576  # Total patches
+        neuron_activation_stats_dict[str(key)][id_sample] = [
             avg_activation,
-            neuron_counts[neuron_idx]
+            neuron_counts[key]
         ]
 
     return neuron_activation_stats_dict
@@ -628,7 +631,7 @@ def llava_extract(folder_save_embedding,folder_dataset,id_loader=0,device=torch.
     # Calculate the size of each subset
     
     
-    # train[:15%]
+  
     full_dataset = load_dataset("lmms-lab/LLaVA-NeXT-Data", split="train[:15%]", cache_dir=folder_dataset, num_proc=10)
     
     factor=5
@@ -708,9 +711,12 @@ def llava_extract(folder_save_embedding,folder_dataset,id_loader=0,device=torch.
                     indices_text_tags=torch.where(inputs['input_ids'][0] != image_tag)[0][5:]
                     result_sae_image = sae(el[0][0][indices_image_tags].to(sae.device))
                     result_sae_text = sae(el[0][0][indices_text_tags].to(sae.device))
-                        
-                    latent_indices_visual,latent_acts_visual =extract_matching_neuron_values_indices(result_sae_image.latent_indices.to(device),result_sae_image.latent_acts.to(device),target_tensor)
-                    latent_indices_textual,latent_acts_textual =extract_matching_neuron_values_indices(result_sae_text.latent_indices.to(device),result_sae_text.latent_acts.to(device),target_tensor) 
+                    
+                         
+                    latent_indices_visual,latent_acts_visual =extract_matching_neuron_values_indices(result_sae_image.latent_indices.to(device),
+                                                                                                     result_sae_image.latent_acts.to(device),target_tensor)
+                    latent_indices_textual,latent_acts_textual =extract_matching_neuron_values_indices(result_sae_text.latent_indices.to(device),
+                                                                                                       result_sae_text.latent_acts.to(device),target_tensor) 
                     
                     
                 else:

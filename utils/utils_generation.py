@@ -3,7 +3,7 @@ os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["HF_HUB_CACHE"]="/data/lanza/hub"
 os.environ["SAE_DISABLE_TRITON"] = "0"
 os.environ["TOKENIZERS_PARALLELISM"]="false"
-from datasets import load_dataset
+
 os.environ["PATH"] += os.pathsep + "/sbin/"
 import torch
 import json
@@ -22,6 +22,7 @@ from PIL import Image
 from utils.utils_image import reconstruct_image, create_image_patches
 import gin
 import glob
+from datasets import load_dataset
 
 def take(id_loader, iterable):
     "Return one fifth of items from the iterable based on id_loader (0-4)"
@@ -42,7 +43,7 @@ def check_neuron_in_text(id_neuron:int, list_text_indices:List):
             return True
     return False
 
-def questions_routine_vqa(texts_list:List,modality:str='image'):
+def questions_routine_vqa(texts_list:List,modality:str='visual'):
     """
     Prepares a prompt for the VQA routine to extract shared concepts from a list of texts and images.
 
@@ -52,7 +53,7 @@ def questions_routine_vqa(texts_list:List,modality:str='image'):
     Returns:
         List: A list containing the formatted prompt string for the model.
     """
-    if modality=='image':
+    if modality=='visual':
         GUIDELINES = """ 
             [REQUIREMENTS]
 
@@ -117,7 +118,7 @@ def questions_routine_vqa(texts_list:List,modality:str='image'):
 
     return [GUIDELINES]
 
-def questions_routine_llava(texts_list:List,modality:str='image'):
+def questions_routine_llava(texts_list:List,modality:str='visual'):
     """
     Prepares a prompt for the Llava-Next routine to extract shared concepts from a list of texts and images.
 
@@ -127,40 +128,30 @@ def questions_routine_llava(texts_list:List,modality:str='image'):
     Returns:
         List: A list containing the formatted prompt string for the model.
     """ 
-    if modality=='image':
-        GUIDELINES = """ 
-            [REQUIREMENTS]
+    if modality=='visual':
+        if modality=='visual':
+            GUIDELINES = """ 
+                [REQUIREMENTS]
+                    Focus only on the highlighted region in each image. If no region is highlighted or if the highlighted region is minimal (e.g., a few bright spots), ignore the image.
+                
+                    Identify common visual patterns, objects, or concepts in the activated regions. For example, note if highlighted areas show consistent structures, such as mesh patterns or similar objects.\
+                
+                [GUIDELINES]
+                Consider Text Context: While maintaining primary focus on the highlighted regions in images, you may marginally consider the associated text (questions and answers) to support or refine your visual observations. 
+                However, the final concept should be predominantly based on visual patterns.
+                    Concise Description Only: Provide a short, direct description of the common features within the highlighted regions. Avoid any interpretive language—simply state what you see, such as “mesh-like structures” or “actions related to joy or happiness”
+                
+                1. Describe Only the Highlighted Regions: Generate captions solely based on the highlighted regions. If no meaningful pattern is visible, or if only a few scattered spots are highlighted,
+                    output: \"Concept:  `No visual concept`\"
+                    
+                2. Consider Text Context: While maintaining primary focus on the highlighted regions in images, you may marginally consider the associated text (questions and answers) to support or refine your visual observations. However, the final concept should be predominantly based on visual patterns.
+                    
+                3. Concise Description Only: Provide a short, direct description of the common features within the highlighted regions. Avoid any interpretive language—simply state what you see, such as “mesh-like structures” or “actions related to joy or happiness”
 
-            1. Focus only on the highlighted region in each image. If no region is highlighted or if the highlighted region is minimal (e.g., a few bright spots), ignore the image.
-            2. Identify common visual patterns, objects, or concepts in the activated regions. For example, note if highlighted areas show consistent structures, such as mesh patterns or similar objects.
-            
-            [GUIDELINES]
-            
-            1.You will receive a series of images and correlated texts, and you have to identify the shared concept between them. The images will be masked, so you will have to rely only on the visible portion of image to generate a concept.
-            
-            2.Concepts can be only visual concepts so related to the images. For each image, we will provide also a text related to it. 
-            The texts can be only used to guide the generation, such as if you see a series of images regarding a specific race of dog look also if the all texts, or part of them, mention the race dog.
-            However, you will not generate a concept ONLY based on the text
+                4. Output Format: Begin each response Ensure the last line of your output follows this format.
 
-            
-            3. Use concise description. Provide a short, direct description of the common features within the highlighted regions (LESS THAN 8 WORDS). 
-            Avoid any interpretive language—simply state what you see, such as “mesh-like structures” or “actions related to joy or happiness”. 
-            
-            
-            4. If you cannot correlate to any visual concept write ``No visual concept'', for example if the pixels are too few and too sparse to be related to a human concept.
-
-            [OUTPUT EXAMPLES]
-            - Concept: "A tennis racket"   
-            
-             -Concept: "A steak"
-        
-            - Concept: "No visual concept"   
-            
-            
-            
-            Remember,Write always only one Concept for the entire set of inputs
-        """
-    
+           
+            """
     else:
         GUIDELINES=""" 
             [REQUIREMENTS]
@@ -194,7 +185,7 @@ def questions_routine_llava(texts_list:List,modality:str='image'):
         GUIDELINES += " image {}: question and answer {}.\n\n".format(DEFAULT_IMAGE_TOKEN,text)
 
     return [GUIDELINES]
-def create_dictionary_neurons(folder_save_embedding:Path, list_neurons:List[int],modality:str='image')->None:
+def create_dictionary_neurons(folder_save_embedding:Path, list_neurons:List[int],modality:str='visual')->None:
         """
         Create a dictionary mapping each neuron to its top-5 most activated samples.
 
@@ -253,7 +244,7 @@ def generate_hypotheses_image(folder_dataset:Path,folder_save_embedding:Path, di
 
 
     """    
-    modality='image'
+    modality='visual'
     if not os.path.exists(dictionary_neurons_path):
         list_neurons=range(5000)
         dictionary_neurons_path=create_dictionary_neurons(folder_save_embedding,list_neurons,modality=modality)
@@ -408,7 +399,7 @@ def generate_hypotheses_text(folder_dataset:Path,folder_save_embedding:Path, dic
 
 
     """    
-    modality='text'
+    modality='textual'
     if not os.path.exists(dictionary_neurons_path):
         list_neurons=range(5000)
         dictionary_neurons_path=create_dictionary_neurons(folder_save_embedding,list_neurons,modality=modality)
@@ -523,7 +514,7 @@ def generate_hypotheses_text(folder_dataset:Path,folder_save_embedding:Path, dic
     with open(path_hypo, 'w') as json_file:
         json.dump(dictionary_hypo, json_file, indent=4)
 
-def unite_dictionaries(dictionaries_neuron_path:Path,modality:str='image')->None:
+def unite_dictionaries(dictionaries_neuron_path:Path,modality:str='visual')->None:
 
     """Unites multiple dictionary files into a single complete dictionary file.
         Execute this function after generate hypotheses for each neuron in SAE (thorugh generate_hypotheses)  
@@ -577,7 +568,7 @@ def generate_hypotheses_image_llava(folder_dataset:Path,folder_save_embedding:Pa
 
 
     """    
-    modality='image'
+    modality='visual'
     if not os.path.exists(dictionary_neurons_path):
         list_neurons=range(5000)
         dictionary_neurons_path=create_dictionary_neurons(folder_save_embedding,list_neurons,modality=modality)
@@ -609,21 +600,16 @@ def generate_hypotheses_image_llava(folder_dataset:Path,folder_save_embedding:Pa
     model.generation_config.top_p=None
     model.eval()
     
-    
-
-    
     dictionary_neurons=json.load(open(dictionary_neurons_path,'r'))
     dictionary_hypo={str(i): [] for i in range(5000)}
 
     conv_template = "qwen_1_5"
     system="You are a meticulous AI researcher conducting an important investigation into a certain neuron in a vision language model. Your task is to analyze the neuron and provide an explanation that thoroughly encapsulates its behavior."
     conv = copy.deepcopy(conv_templates[conv_template])
-    
     conv.system=system
     
 
     portion_dictionary_neurons=take(id_loader, dictionary_neurons.items())
-    ##where to cut
   
     needed_ids = set()
     for _, batch in portion_dictionary_neurons:  # limit to 1000 for progress bar
@@ -652,7 +638,7 @@ def generate_hypotheses_image_llava(folder_dataset:Path,folder_save_embedding:Pa
 
             # build prompt text
             convo = entry["conversations"][0]["value"]
-            text_feat = feats["text_features"]["final_output"]
+            text_feat = feats["textual_features"]["final_output"]
             texts.append(convo.replace("<image>", " ").replace("\n", " ")
                             + f" [ {text_feat} ]")
 
@@ -712,6 +698,7 @@ def generate_hypotheses_image_llava(folder_dataset:Path,folder_save_embedding:Pa
                 # print(text_outputs[0])
                 conv.messages.pop()
                 conv.messages.pop()
+                print(output)
                 dictionary_hypo[neuron_number] = output
                 torch.cuda.empty_cache()
 
@@ -750,11 +737,7 @@ def generate_hypotheses_text_llava(folder_dataset:Path,folder_save_embedding:Pat
        
      # train[:15%]
     data = load_dataset("lmms-lab/LLaVA-NeXT-Data", split="train[:15%]", cache_dir=folder_dataset, num_proc=10)
-     
- 
     
-
-
     # Load model
     pretrained = "lmms-lab/llava-onevision-qwen2-72b-ov"
     model_name = "llava_qwen"

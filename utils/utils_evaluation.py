@@ -100,18 +100,10 @@ def eval_text_text(CLIP_model:clip,concept_designed:str, concept_list:List,cosin
     # Tokenize and encode texts
     similarity_vector=[]
     with torch.no_grad():
-      
-       
         
         text_features_concept = CLIP_model.encode_text(concept_designed)
         
-        text_features_list=concept_list
-      
-        # for el in text_features_list:
-            
-        #     cos=cosine_function(text_features_concept, el)
-        #     similarity_vector_tmp.append(cos.item())
-        cos=cosine_function(text_features_concept, text_features_list)
+        cos=cosine_function(text_features_concept, concept_list)
         
         similarity_vector.append(cos)
         
