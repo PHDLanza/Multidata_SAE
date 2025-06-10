@@ -539,8 +539,8 @@ def create_average_activation_dictionary_llava_next(folder_save_embedding:Path)-
             ...
         }
     """
-    neuron_activation_stats_dict_image = {str(i): {} for i in range(5000)}
-    neuron_activation_stats_dict_text = {str(i): {} for i in range(5000)}
+    neuron_activation_stats_dict_visual = {str(i): {} for i in range(5000)}
+    neuron_activation_stats_dict_textual = {str(i): {} for i in range(5000)}
     
     json_files = glob.glob(os.path.join(folder_save_embedding, 'llava_15_block_*.json'))
     
@@ -548,39 +548,52 @@ def create_average_activation_dictionary_llava_next(folder_save_embedding:Path)-
     
         res=json.load(open(file_path))
         for key, value in res.items():
-            neuron_activation_stats_dict_image=average_values_indices(value['visual_features']['latent_indices'],value['visual_features']['latent_acts'],neuron_activation_stats_dict_image,key)  
-            neuron_activation_stats_dict_text=average_values_indices(value['textual_features']['latent_indices'],value['textual_features']['latent_acts'],neuron_activation_stats_dict_text,key)  
+            neuron_activation_stats_dict_visual=average_values_indices(value['visual_features']['latent_indices'],value['visual_features']['latent_acts'],neuron_activation_stats_dict_visual,key)  
+            neuron_activation_stats_dict_textual=average_values_indices(value['textual_features']['latent_indices'],value['textual_features']['latent_acts'],neuron_activation_stats_dict_textual,key)  
 
 
     with open(folder_save_embedding+"average_activation_dictionary_textual.json", "a") as f:
-        json.dump(neuron_activation_stats_dict_text, f, indent=4)
-        
+        json.dump(neuron_activation_stats_dict_textual, f, indent=4)
+    create_average_activation_dictionary(folder_save_embedding,range(5000),modality='textual')
     with open(folder_save_embedding+"average_activation_dictionary_visual.json", "a") as f:
-        json.dump(neuron_activation_stats_dict_image, f, indent=4)
-        
+        json.dump(neuron_activation_stats_dict_visual, f, indent=4)
+    create_average_activation_dictionary(folder_save_embedding,range(5000),modality='visual')
 
-def average_values_indices(list_indices: List[List[int]], list_acts:List[List[int]],neuron_activation_stats_dict:dict,id_sample:str)->Dict:
+def average_values_indices(lists_indices: List[List[int]], lists_acts:List[List[int]],neuron_activation_stats_dict:dict,id_sample:str)->Dict:
 
-    """Compute the averages activations values for all active neurons for each patch in a single image and adding to 
+    """Compute the averages activations values for all active neurons for each patch, or token generated, in a single image, or single text, and adding to 
         the total dictionary
 
     Args:
-        list_indices (List[List[int]]): List with the indices of neurons activate for each patch  
-        list_acts (List[List[int]]): List with the activations of neurons activate for each patch 
-        neuron_activation_stats_dict (dict): Dictionary 
-        id_sample (str): VQA id_sample
+        lists_indices (List[List[int]]): List of lists, where each inner list contains indices of activated neurons for a patch.
+        lists_acts (List[List[int]]): List of lists, where each inner list contains activation values for the corresponding neurons in a patch.
+        neuron_activation_stats_dict (dict): Dictionary to accumulate activation statistics for each neuron.
+        id_sample (str): Identifier for the current sample (e.g., VQA sample ID or LlaVA sample ID).
     Comments:
-        both list have shape(576,[range between 0 to 256])-> num of patches and
-        active neurons has intersection between the neurons designed to be analized and the best 256 k highest valued neuron in the patch
+        both list have the same shape (576,[range between 0 to 256]) for images  and for text (num_token_analyzed,[range between 0 to 256])
+        The [range between 0 to 256] is the intersection between the neurons designed to be analized (generally first 5000) and the best 256 k highest valued neuron in the patch or string of tokens
+      
     Returns:
         Dictionary updated (see above for the structure)
+    """
+    """
+    
+
+    Notes:
+        - Both lists have length 576 (number of patches), with each inner list containing up to 256 activated neurons per patch.
+        - Only neurons present in both the analysis set and the top-256 activations per patch are included.
+        - The function updates the dictionary with the average activation and count of patches for each neuron in the current sample.
+
+    Returns:
+        dict: Updated neuron activation statistics dictionary.
+    
     """
     # Use numpy arrays for faster computation
     neuron_sums = {}
     neuron_counts = {}
     
     # Process all patches at once
-    for patch_indices, patch_acts in zip(list_indices, list_acts):
+    for patch_indices, patch_acts in zip(lists_indices, lists_acts):
         for neuron_idx, activation in zip(patch_indices, patch_acts):
             if neuron_idx not in neuron_sums.keys():
                 neuron_sums[neuron_idx] = 0.0
@@ -769,3 +782,84 @@ def compute_fvu(path_file:str)->None:
     print(f"Variance text: {variance}")
     print(f"Num elements text: {len(values)}")
     return mean,variance,len(values)
+
+def create_dictionary_neurons(path_embedding:Path, list_neurons:List[int],modality:str='visual')->None:
+        """
+        Create a dictionary mapping each neuron to its top-5 most activated samples.
+
+        Args:
+            path_embedding (Path): Path to the folder where embeddings are saved.
+            list_neurons (List[int]): List of neuron indices to process.
+            modality (str): Modality type, either 'visual' or 'textual':Default.
+
+        Returns:
+            Path: Path to the saved dictionary JSON file.
+        """
+        # Determine which JSON files to load based on the folder name
+        if 'vqa' not in path_embedding:
+            json_pattern = 'vqa_block*.json'
+        else:
+            json_pattern = 'llava_15_block_*.json'
+        json_files = glob.glob(os.path.join(path_embedding, json_pattern))
+        
+        # Create a combined dictionary for all files
+        combined_data = {}
+
+        # Read and combine all json files
+        for file_path in json_files:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                combined_data.update(data)
+
+        dictionary_neurons={}
+        name_dictionary='dictionary_neurons_'+modality+'.json'
+        average_activation_dictionary = json.load(open(path_embedding+'average_activation_dictionary_'+modality+'.json'))
+        for neuron in tqdm(list_neurons,desc='Sorting activations and creating '+name_dictionary+' file'):
+            # Sort by activation value (descending)
+            sorted_list = sorted(average_activation_dictionary[str(neuron)].items(), key=lambda x: x[1][1], reverse=True)
+            # Take the top 5 activated samples
+            top_5_samples=[sample_id[0] for sample_id in sorted_list[0:5]]
+
+            dictionary_neurons[neuron]={sample_id:combined_data[sample_id] for sample_id in top_5_samples}
+            
+        result_path=os.path.join(path_embedding, name_dictionary)   
+        with open(result_path, 'a') as f:
+            json.dump(dictionary_neurons, f)
+        return result_path
+
+def unite_dictionaries(path_dictionaries_neuron:Path,modality:str='visual')->None:
+
+    """Unites multiple dictionary files into a single complete dictionary file.
+        Execute this function after generate hypotheses for each neuron in SAE (thorugh generate_hypotheses)  
+    Args:
+        dictionaries_neuron_path (Path): Path to the directory containing the dictionary files 
+            and where the output file will be saved.
+        modality (str, optional): Modality of the input ('image' or 'text'). Default is 'image'.
+    Notes:
+        
+        - Input files should follow the pattern 'dictionary_hypo_*{modality}_.json'
+        - Each input dictionary is filtered based on numerical ranges (1000 numbers per file)
+        - The final dictionary is sorted by numerical keys
+        - Output is saved as 'dictionary_hypotheses_complete_{modality}.json' in the same directory
+     Returns:
+        None
+    
+    """    
+    
+    files=glob.glob(path_dictionaries_neuron+'dictionary_hypo_*'+modality+'_.json')
+    dictionary={}
+    for el in files:
+        
+        num=el.split('_')[-3]
+        index_start=int(num)*1000
+        index_end=int(index_start)+999
+        tmp_dict = json.load(open(el))
+        filtered_dict = {k: v for k, v in tmp_dict.items() if int(k) >= index_start and int(k) <= index_end}
+        if dictionary=={}:
+            dictionary=filtered_dict  
+        else:
+            dictionary.update(filtered_dict)
+    sorted_dictionary = dict(sorted(dictionary.items(), key=lambda x: int(x[0])))
+    with open(path_dictionaries_neuron+'dictionary_hypotheses_complete_'+modality+'.json', 'a') as f:
+        json.dump(sorted_dictionary, f, indent=4)
+        
