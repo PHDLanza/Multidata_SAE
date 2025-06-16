@@ -149,7 +149,7 @@ def questions_routine_llava(list_texts:List,modality:str='visual'):
                 
           
         """
-    else:
+    elif modality=='textual':
         GUIDELINES=""" 
             [REQUIREMENTS]
                Focus only on the text content provided with each example. If the text is missing, irrelevant, or extremely minimal (e.g., a few unrelated words), ignore the text.
@@ -177,8 +177,7 @@ def questions_routine_llava(list_texts:List,modality:str='visual'):
         GUIDELINES += " image {}: question and answer {}.\n\n".format(DEFAULT_IMAGE_TOKEN,text)
 
     return [GUIDELINES]
-    
-    
+     
 @gin.configurable
 def generate_hypotheses_image(path_dataset:Path,path_embedding:Path, path_dictionary_neurons:Path,path_labels:Path,id_loader:int=0,device:torch.device='cuda:0')->None:
     """
@@ -610,7 +609,7 @@ def generate_hypotheses_image_llava(path_dataset:Path,path_embedding:Path, path_
                     
                     max_new_tokens=4096
                 )
-                
+                print(output)
                 output = tokenizer.batch_decode(output, skip_special_tokens=True)[0]
                 # print(text_outputs[0])
                 conv.messages.pop()
@@ -618,8 +617,7 @@ def generate_hypotheses_image_llava(path_dataset:Path,path_embedding:Path, path_
                 dictionary_hypo[neuron_number] = output
                 torch.cuda.empty_cache()
 
-        else:
-            dictionary_hypo[neuron_number]='No visual concept'
+
         
     with open(path_hypo, 'a') as json_file:
         json.dump(dictionary_hypo, json_file, indent=4)
@@ -644,7 +642,6 @@ def generate_hypotheses_text_llava(path_dataset:Path,path_embedding:Path, path_d
 
     """    
     modality='textual'
-    path_hypo =Path(path_embedding+'dictionary_hypo_'+str(id_loader)+'_'+modality+'_.json')
     if not os.path.exists(path_dictionary_neurons):
         list_neurons=range(5000)
         path_dictionary_neurons=create_dictionary_neurons(path_embedding,list_neurons,modality=modality)
@@ -695,9 +692,9 @@ def generate_hypotheses_text_llava(path_dataset:Path,path_embedding:Path, path_d
         needed_ids.update(map(int, batch.keys()))
     lookup = {}
     for example in tqdm(data, desc="Building lookup", leave=False):
-        img_id = int(example["id"])
-        if img_id in needed_ids:
-            lookup[img_id] = {
+        id_sample = int(example["id"])
+        if id_sample in needed_ids:
+            lookup[id_sample] = {
                 "conversations": example["conversations"],
                 "image": example["image"].convert('RGB')
             }
@@ -707,20 +704,19 @@ def generate_hypotheses_text_llava(path_dataset:Path,path_embedding:Path, path_d
 
     conv.system=system
     
-    actual_conversation=conv
-    
   
+    
     for neuron_number,batch in tqdm(portion_dictionary_neurons,desc=' Generate the Text Hypotheses ' ,total=1000,leave=False):
-        ids_list=batch.keys()   
+        
         #Used to memorize which images are used to derive the hypothesis
         images=[]
         texts=[]
         
         
 
-        for img_id_str, feats in batch.items():
-            img_id = int(img_id_str)
-            entry = lookup.get(img_id)
+        for id_sample_str, feats in batch.items():
+            id_sample = int(id_sample_str)
+            entry = lookup.get(id_sample)
             
             if entry is None:
                 continue
@@ -738,45 +734,44 @@ def generate_hypotheses_text_llava(path_dataset:Path,path_embedding:Path, path_d
             
         
     # TypeError: color must be int or single-element tuple
-    if texts:
-        if images:
-        
-            image_tensors = process_images(images, image_processor, model.config)
+        if texts:
+            if images:
             
-            image_tensors = [_image.to(dtype=torch.float16, device=model.device) for _image in image_tensors]
-            image_sizes = [image.size for image in images]
+                image_tensors = process_images(images, image_processor, model.config)
+                
+                image_tensors = [_image.to(dtype=torch.float16, device=model.device) for _image in image_tensors]
+                image_sizes = [image.size for image in images]
 
-                    # Prepare the template
+                        # Prepare the template
 
             questions= questions_routine_llava(texts,modality=modality)
-            
-        with torch.no_grad():
-            
-
-            conv.append_message(conv.roles[0], questions[0])
-            conv.append_message(conv.roles[1], None)
-            prompt = conv.get_prompt()
-            input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(model.device)
-            # Generate response
-            
-            output = model.generate(
-
-                input_ids,
-                images=image_tensors,
-                image_sizes=image_sizes,
-                do_sample=False,
                 
-                max_new_tokens=4096
-            )
-            
-            output = tokenizer.batch_decode(output, skip_special_tokens=True)[0]
-            conv.messages.pop()
-            conv.messages.pop()
-            dictionary_hypo[neuron_number] = output
-            torch.cuda.empty_cache()
-            
-    else:
-        dictionary_hypo[neuron_number]='No textual concept'
+            with torch.no_grad():
+                
+
+                conv.append_message(conv.roles[0], questions[0])
+                conv.append_message(conv.roles[1], None)
+                prompt = conv.get_prompt()
+                input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(model.device)
+                # Generate response
+                
+                output = model.generate(
+
+                    input_ids,
+                    images=image_tensors,
+                    image_sizes=image_sizes,
+                    do_sample=False,
+                    
+                    max_new_tokens=4096
+                )
+                
+                output = tokenizer.batch_decode(output, skip_special_tokens=True)[0]
+                conv.messages.pop()
+                conv.messages.pop()
+                dictionary_hypo[neuron_number] = output
+                torch.cuda.empty_cache()
+                
+
             
  
     with open(path_hypo, 'w') as json_file:
