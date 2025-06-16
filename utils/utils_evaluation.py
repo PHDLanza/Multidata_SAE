@@ -9,9 +9,7 @@ os.environ["PATH"] += os.pathsep + "/sbin/"
 import torch
 import json
 from typing import  List, Dict
-
 from tqdm import tqdm
-
 from pathlib import Path
 import numpy as np
 from utils.utils_image import create_image_patches, reconstruct_image
@@ -21,7 +19,9 @@ import torch.nn as nn
 import glob
 import clip
 import glob
- 
+from datasets import load_dataset 
+from utils.api import unite_dictionaries
+from utils.utils_image import reconstruct_image_blurring
 def create_dictionary_neurons(folder_save_embedding:Path, list_neurons:List[int])->None:
         """_summary_
 
@@ -68,12 +68,9 @@ def eval_text_vision(CLIP_model,preprocess, image, concept_list,device):
     """    
 
     
-    # model, preprocess = clip.load("ViT-B/32", device=device)
 
     image = preprocess(image).unsqueeze(0).to(device)
-    # ["a diagram", "a dog", "a cat"]
     
-
     with torch.no_grad():
         # image_features = CLIP_model.encode_image(image)
         # text_features = CLIP_model.encode_text(concept_list)
@@ -111,79 +108,136 @@ def eval_text_text(CLIP_model:clip,concept_designed:str, concept_list:List,cosin
 
 def cleaning_hypotheses(dictionary_hypotheses:Dict)->Dict:
     cleaned_dictionary_hypotheses={}  
+    list_concepts=[]
     for key,value in tqdm(dictionary_hypotheses.items(),desc='Cleaning the dictionary' ,total=len(dictionary_hypotheses),leave=True):
-    
+        
         if value:       
-                    
-            if len(value.split('Concept: '))>1:
+            if isinstance(value, tuple):
+                tmp_values = value[0]
+            else:
+                tmp_values = value
+            if len(tmp_values.split('Concept: '))>1:
                 
-                concept=value.split('Concept:')[1].replace('"','').strip()
+                concept=tmp_values.split('Concept:')[1].replace('"','').strip()
                 
-                if concept!="No textual concept" and concept!="No visual concept.":
+                if "No textual concept" not in concept and "No visual concept" not in concept:
                     
-                    cleaned_dictionary_hypotheses[key]=concept
-                    enum+=1
-                    
-    return cleaned_dictionary_hypotheses
+                    if concept not in list_concepts:
+                        list_concepts.append(concept)
+                        cleaned_dictionary_hypotheses[key]=concept
+                        
+    return cleaned_dictionary_hypotheses,list_concepts
 
-def eval_hypothtesis_image(folder_embeddings:Path,folder_dataset:Path,folder_labels:Path,dictionary_neurons_path:Path,device:torch.cuda.device='cuda:0'):
-    """_summary_
+def eval_visual_hypothteses(folder_embeddings:Path,folder_dataset:Path,dictionary_neurons_path:Path,device:torch.cuda.device='cuda:0'):
+    """
+    Evaluate visual hypotheses for neurons using CLIP and dataset images.
 
     Args:
-        folder_embeddings (Path): _description_
-        folder_dataset (Path): _description_
-        folder_labels (Path): _description_
-        dictionary_neurons_path (Path): _description_
-        dicty (Dict): _description_
-        device (_type_, optional): _description_. Defaults to 'cuda:0'.
-        
-    """     
-    average_activation_dictionary=json.load(open(folder_labels, 'r'))
-    df_label=pd.DataFrame.from_dict(average_activation_dictionary)
-    dictionary_sae_neurons=json.load(open(dictionary_neurons_path,'r'))
-    dictionary_hypotheses=json.load(open(folder_embeddings+'dictionary_hypotheses_complete_image.json','r'))
-    dictionary_hypotheses_cleaned=cleaning_hypotheses(dictionary_hypotheses)
+        folder_embeddings (Path): Path to the folder containing embedding files.
+        folder_dataset (Path): Path to the dataset cache directory.
+        dictionary_neurons_path (Path): Path to the JSON file with neuron-to-image mappings.
+        device (torch.cuda.device, optional): Device to run computations on. Defaults to 'cuda:0'.
 
+    Returns:
+        None
+    """
+    data = load_dataset("lmms-lab/LLaVA-NeXT-Data", split="train[:15%]", cache_dir=folder_dataset, num_proc=10)
+
+    dictionary_sae_neurons=json.load(open(dictionary_neurons_path,'r'))
+    needed_ids = set()
+    for _, batch in dictionary_sae_neurons.items():  # limit to 1000 for progress bar
+        needed_ids.update(map(int, batch.keys()))
+    lookup = {}
+
+    for example in tqdm(data, desc="Building lookup", leave=False):
+        img_id = int(example["id"])
+        if img_id in needed_ids:
+            lookup[img_id] = {
+                
+                "conversations": example["conversations"],
+                "image": example["image"].convert('RGB')
+            
+            }
+        if len(lookup) >= len(needed_ids):
+            break
+    hypotheses_path = folder_embeddings + 'dictionary_hypotheses_complete_visual.json'
+    if not os.path.exists(hypotheses_path):
+        unite_dictionaries(folder_embeddings,modality='visual')   
+    dictionary_hypotheses = json.load(open(hypotheses_path, 'r'))
+    dictionary_concepts,list_concepts=cleaning_hypotheses(dictionary_hypotheses)
+
+
+    list_concepts = [concept for concept in dictionary_concepts.values() if "pixelated" not in concept.lower()]
     
     clip_model,preprocess=clip.load("ViT-B/16",device=device)
     clip_model.eval()
     prob_dictionary={}
-    concept_list = clip.tokenize( [el for el in dictionary_hypotheses_cleaned.values()]).to(device)
+    prob_dictionary_categories={}
+    tmp=clip.tokenize([concept for concept in list_concepts]).to(device)
+    categories = ["scene", "object", "part", "material", "texture", "color"]
+    categories_clip=clip.tokenize([label for label in categories]).to(device)
+    
+    for neuron_number,_ in tqdm(dictionary_concepts.items(),desc='Evaluate the visual hypothesis' ,total=len(dictionary_concepts),leave=True):
+        batch=dictionary_sae_neurons[neuron_number]
+        texts,tmp_list, tmp_categories_list = [],[],[]
+        for img_id_str, feats in batch.items():
+            img_id = int(img_id_str)
+            entry = lookup.get(img_id)
+            
+            if entry is None:
+                continue
 
-    for key,value in tqdm(dictionary_hypotheses_cleaned.items(),desc='Evaluate the visual hypothesis' ,total=len(dictionary_hypotheses_cleaned),leave=True):
+            # build prompt text
+            convo = entry["conversations"][0]["value"]
+            text_feat = feats["textual_features"]["final_output"]
+            texts.append(convo.replace("<image>", " ").replace("\n", " ")
+                            + f" [ {text_feat} ]")
+
+            # mask out patches
+            image = entry["image"]
+            # Process image patches
+            patches = create_image_patches(image)
+                    
+            
+            # Create masked image based on neuron activation
+            
+            zeros = np.zeros(len(patches), dtype=np.uint8)
+            for patch_idx, inds in enumerate(feats["visual_features"]["latent_indices"]):
+                if int(neuron_number) in inds:
+                    zeros[patch_idx] = 1
+            
+            reconstructed_array = reconstruct_image(patches, zeros)
+            # reconstructed_array = reconstruct_image_blurring(patches, zeros)
+                
+            prob=eval_text_vision(CLIP_model=clip_model,preprocess=preprocess,concept_list=tmp,
+                                image=Image.fromarray(reconstructed_array),device=device)
+            
+            prob_categories = eval_text_vision(CLIP_model=clip_model, preprocess=preprocess, concept_list=categories_clip,
+                                               image=Image.fromarray(reconstructed_array), device=device)
+            tmp_list.append(prob[0])   
+            tmp_categories_list.append(prob_categories[0])
+            
+   
+            
+        average_miner=np.mean(tmp_list,axis=0)
+        variance_miner=np.var(tmp_list,axis=0)
         
-        if value:
-            neuron_number=key
-            batch=dictionary_sae_neurons[neuron_number]
-            ids_list=batch.keys()
-            neuron_number=int(neuron_number)
-            tmp_list=[]
-            for i,id in enumerate(ids_list):
+        average_categories=np.mean(tmp_list,axis=0)
+        variance_categories=np.var(tmp_list,axis=0)
+        
                 
-                img_name=df_label[id]['image_name']
-                folder_tmp = folder_dataset+'train2014/' if 'train' in img_name else folder_dataset+'val2014/'
-                patches=create_image_patches(folder_tmp+img_name)
-                zeros_vector = np.zeros(576)
-                
-                for i,indices_array in enumerate(batch[id]["visual_features"]['latent_indices']):
-                    # common_elements=set(indices_array.tolist()).intersection(indices[0].tolist())
-                    if neuron_number in indices_array:
-                        zeros_vector[i]=1
-                        
-                    reconstructed_array = reconstruct_image(patches,zeros_vector)
-                
-                prob=eval_text_vision(CLIP_model=clip_model,preprocess=preprocess,concept_list=concept_list,image=Image.fromarray(reconstructed_array),device=device)
-                tmp_list.append(prob[0]) 
-            average=np.mean(tmp_list,axis=0)
-                
-            prob_dictionary[neuron_number]=average.tolist()
+        prob_dictionary[neuron_number]=[average_miner.tolist(),variance_miner.tolist()]
+        prob_dictionary_categories[neuron_number]=[average_categories.tolist(),variance_categories.tolist()]
                 
    
                     
     
     json.dump(prob_dictionary, open(folder_embeddings + 'prob_concept_image_dictionary.json', 'a'), indent=4)
+    json.dump(prob_dictionary_categories, open(folder_embeddings + 'prob_concept_image_categories_dictionary.json', 'a'), indent=4)
 
-def eval_hypothtesis_text(folder_embeddings:Path,dictionary_neurons_path:Path,device:torch.cuda.device='cuda:0'):
+
+
+def eval_textual_hypothtesis(folder_embeddings:Path,folder_dataset:Path,dictionary_neurons_path:Path,device:torch.cuda.device='cuda:0'):
     """_summary_
 
     Args:
@@ -199,46 +253,82 @@ def eval_hypothtesis_text(folder_embeddings:Path,dictionary_neurons_path:Path,de
   
     
     # df_label=pd.DataFrame.from_dict(average_activation_dictionary)
-    dictionary_sae_neurons=json.load(open(dictionary_neurons_path,'r'))
-    dictionary_hypotheses=json.load(open(folder_embeddings+'dictionary_hypotheses_complete_text.json','r'))
-    dictionary_hypotheses_cleaned=cleaning_hypotheses(dictionary_hypotheses)
     cosine = nn.CosineSimilarity(dim=1, eps=1e-6)
-    concept_list = clip.tokenize( [el for el in dictionary_hypotheses_cleaned.values()]).to(device)
-    concept_list = clip_model.encode_text(concept_list)
+
+
     
     clip_model.eval()
     prob_dictionary={}
-    
-    for key,value in tqdm(dictionary_hypotheses_cleaned.items(),desc='Evaluate the textual hypothesis' ,total=len(dictionary_hypotheses_cleaned),leave=True):
-        
-        if value:
+                            
 
-            neuron_number=key
-            batch=dictionary_sae_neurons[neuron_number]
-            ids_list=batch.keys()
-    
-            neuron_number=int(neuron_number)
-            tmp_tensor = torch.tensor([]).to(device)
-    
-            for id in ids_list:
-                tmp_text=batch[id]["text_features"]['final_output'].replace('assistant','')
-                tmp_text=tmp_text.replace('\n','')
-                tmp_text=clip.tokenize(tmp_text).to(device)
+    data = load_dataset("lmms-lab/LLaVA-NeXT-Data", split="train[:15%]", cache_dir=folder_dataset, num_proc=10)
+
+    dictionary_sae_neurons=json.load(open(dictionary_neurons_path,'r'))
+    needed_ids = set()
+    for _, batch in dictionary_sae_neurons.items():  # limit to 1000 for progress bar
+        needed_ids.update(map(int, batch.keys()))
+    lookup = {}
+
+    for example in tqdm(data, desc="Building lookup", leave=False):
+        img_id = int(example["id"])
+        if img_id in needed_ids:
+            lookup[img_id] = {
                 
-                
-                prob=eval_text_text(CLIP_model=clip_model,concept_designed=tmp_text,concept_list=concept_list,cosine_function=cosine)
-                if len(tmp_tensor)==0:       
-                    tmp_tensor=prob[0].unsqueeze(0)
-                else:
-                    tmp_tensor = torch.cat((tmp_tensor, prob[0].unsqueeze(0)), dim=0)
-                
-            average=torch.mean(torch.tensor(tmp_tensor),axis=0)
+                "conversations": example["conversations"],
+                "image": example["image"].convert('RGB')
             
-            prob_dictionary[neuron_number]=average.tolist()
+            }
+        if len(lookup) >= len(needed_ids):
+            break
+    hypotheses_path = folder_embeddings + 'dictionary_hypotheses_complete_textual.json'
+    if not os.path.exists(hypotheses_path):
+        unite_dictionaries(folder_embeddings,modality='textual')   
+    dictionary_hypotheses = json.load(open(hypotheses_path, 'r'))
+    dictionary_concepts,list_concepts=cleaning_hypotheses(dictionary_hypotheses)
+
+
+    
+    prob_dictionary={}
+    prob_dictionary_categories={}
+    tmp=clip.tokenize([concept for concept in list_concepts]).to(device)
+    categories = ["scene", "object", "part", "material", "texture", "color"]
+    categories_clip=clip.tokenize([label for label in categories]).to(device)
+    
+    for neuron_number,_ in tqdm(dictionary_concepts.items(),desc='Evaluate the textual hypothesis' ,total=len(dictionary_concepts),leave=True):
+        batch=dictionary_sae_neurons[neuron_number]
+        texts,tmp_list, tmp_categories_list = [],[],[]
+        for img_id_str, feats in batch.items():
+            img_id = int(img_id_str)
+            entry = lookup.get(img_id)
+            convo = entry["conversations"][0]["value"]
+            text_feat = feats["textual_features"]["final_output"]
+            tmp_text=text_feat
+            tmp_text=clip.tokenize(tmp_text).to(device)
+            
+            
+            prob=eval_text_text(CLIP_model=clip_model,concept_designed=tmp_text,concept_list=tmp,
+                                cosine_function=cosine)
+
+            prob_categories = eval_text_text(CLIP_model=clip_model,concept_designed=tmp_text,concept_list=categories_clip,
+                                cosine_function=cosine)
+            tmp_list.append(prob[0])   
+            tmp_categories_list.append(prob_categories[0])
+            
+   
+            
+        average_miner=np.mean(tmp_list,axis=0)
+        variance_miner=np.var(tmp_list,axis=0)
+        
+        average_categories=np.mean(tmp_list,axis=0)
+        variance_categories=np.var(tmp_list,axis=0)
+        
                 
-           
+        prob_dictionary[neuron_number]=[average_miner.tolist(),variance_miner.tolist()]
+        prob_dictionary_categories[neuron_number]=[average_categories.tolist(),variance_categories.tolist()]
+                
+   
                     
     
-    json.dump(prob_dictionary, open(folder_embeddings + 'prob_concept_text_dictionary.json', 'a'), indent=4)
-    
-    
+    json.dump(prob_dictionary, open(folder_embeddings + 'prob_concept_textual_dictionary.json', 'a'), indent=4)
+    json.dump(prob_dictionary_categories, open(folder_embeddings + 'prob_concept_image_categories_dictionary.json', 'a'), indent=4)
+
