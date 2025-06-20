@@ -554,10 +554,9 @@ def create_average_activation_dictionary_llava_next(folder_save_embedding:Path)-
 
     with open(folder_save_embedding+"average_activation_dictionary_textual.json", "a") as f:
         json.dump(neuron_activation_stats_dict_textual, f, indent=4)
-    create_average_activation_dictionary(folder_save_embedding,range(5000),modality='textual')
+        
     with open(folder_save_embedding+"average_activation_dictionary_visual.json", "a") as f:
         json.dump(neuron_activation_stats_dict_visual, f, indent=4)
-    create_average_activation_dictionary(folder_save_embedding,range(5000),modality='visual')
 
 def average_values_indices(lists_indices: List[List[int]], lists_acts:List[List[int]],neuron_activation_stats_dict:dict,id_sample:str)->Dict:
 
