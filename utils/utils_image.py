@@ -96,6 +96,41 @@ def combine_images_horizontally(images):
         x_offset += img.width
         
     return combined
+def combine_images_horizontally_special(normal_images, masked_images):
+    """
+    Combine two arrays of images horizontally and display them one below the other
+    
+    Args:
+        images (list): List of masked PIL Images to combine
+        normal_images (list): List of normal PIL Images to combine
+        
+    Returns:
+        PIL.Image: Combined image with two rows
+    """
+    normal_images=[ img.resize((336, 336)) for img in normal_images]
+    # Get dimensions for both sets of images
+    total_width = sum(img.width for img in masked_images)
+    max_height = max(img.height for img in masked_images)
+    
+    total_width_normal = sum(img.width for img in normal_images) 
+    max_height_normal = max(img.height for img in normal_images)
+    
+    # Create new image with height for both rows
+    combined = Image.new('RGB', (max(total_width, total_width_normal), max_height + max_height_normal))
+    
+    # Paste masked images in top row
+    x_offset = 0
+    for img in masked_images:
+        combined.paste(img, (x_offset, 0))
+        x_offset += img.width
+        
+    # Paste normal images in bottom row
+    x_offset = 0
+    for img in normal_images:
+        combined.paste(img, (x_offset, max_height))
+        x_offset += img.width
+        
+    return combined
 
 def reconstruct_image_blurring(patches, mask, grid_size=24):
     """
