@@ -1,0 +1,12 @@
+include '../config_file/config_general.gin'
+ 
+ generate_textual_hypotheses_llava:
+    path_dataset=%PATH_DATASET_LLAVA
+    path_dictionary_neurons='path-to-dictionary'# Path to dictionary_neurons, json file containing all the dataset ids related to a neuron
+    path_embedding=%PATH_EMBEDDING_LLAVA
+
+generate_visual_hypotheses_llava:
+    path_dataset=%PATH_DATASET_LLAVA
+    path_dictionary_neurons='path-to-dictionary'# Path to dictionary_neurons, json file containing all the dataset ids related to a neuron
+    path_embedding=%PATH_EMBEDDING_LLAVA
+    

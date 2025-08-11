@@ -1,0 +1,13 @@
+include '../config_file/config_general.gin'
+
+coco_extract:
+
+    vqa_dataset=@VQAXTrainDataset
+    device=%DEVICE #name of used device Defaults to 'cpu'.
+    
+    path_sae=%PATH_SAE
+    path_embedding=%PATH_EMBEDDING_COCO
+    
+VQAXTrainDataset.path_folder=%PATH_DATASET_COCO
+
+VQAXTrainDataset.path_labels=%PATH_LABEL_TRAIN_COCO

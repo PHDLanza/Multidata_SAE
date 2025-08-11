@@ -1,0 +1,16 @@
+
+
+
+DEVICE='cuda:0' # Device to use (e.g., 'cuda:0' for GPU)
+
+PATH_SAE='my-models/sae-checkpoint'  # Path to the SAE checkpoint
+PATH_LABEL_TRAIN_COCO='path-to-dataset' # Path to the VQA-X train labels
+
+PATH_LABEL_TEST_COCO='path-to-dataset' # Path to the VQA-X test labels
+
+PATH_DATASET_COCO='path-to-dataset' # Path to the COCO dataset
+
+PATH_EMBEDDING_COCO='path-to-folder' # Path to the COCO feature embeddings
+
+PATH_EMBEDDING_LLAVA='path-to-folder' # Path to the LLaVA feature embeddings and intermediate results
+PATH_DATASET_LLAVA='path-to-dataset' # Path to the LLaVA dataset
