@@ -7,10 +7,8 @@ import torchvision.transforms as transforms
 import gin
 
 
-    
-    
 @gin.configurable
-class VQAXTrainDataset(Dataset):
+class VQAXDataset(Dataset):
 
 
     def __init__(self, path_labels,path_folder):
