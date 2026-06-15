@@ -1,0 +1,10 @@
+include 'config_file/config_general.gin'
+
+
+llava_extract:
+
+    embedding_path=%EMBEDDING_LLAVA_PATH
+    dataset_path=%DATASET_LLAVA_PATH
+    device=%DEVICE #name of used device Defaults to 'cpu'.
+
+

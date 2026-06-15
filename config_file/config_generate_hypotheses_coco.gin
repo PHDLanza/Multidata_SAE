@@ -1,18 +1,13 @@
-include '../config_file/config_general.gin'
+include 'config_file/config_general.gin'
   
  generate_textual_hypotheses_coco:
 
-    path_dataset=%PATH_DATASET_COCO
-    path_labels=%PATH_LABEL_TRAIN_COCO
-    path_dictionary_neurons='path-to-dictionary'# Path to dictionary_neurons, json file containing all the dataset ids related to a neuron
-
-    path_embedding=%PATH_EMBEDDING_COCO
-
+    dataset_path=%DATASET_COCO_PATH
+    labels_path=%LABEL_TRAIN_COCO_PATH
+    embedding_path=%EMBEDDING_COCO_PATH
 
 generate_visual_hypotheses_coco:
 
-    path_dataset=%PATH_DATASET_COCO
-    path_labels=%PATH_LABEL_TRAIN_COCO
-    path_dictionary_neurons='path-to-dictionary'# Path to dictionary_neurons, json file containing all the dataset ids related to a neuron
-
-    path_embedding=%PATH_EMBEDDING_COCO
+    dataset_path=%DATASET_COCO_PATH
+    labels_path=%LABEL_TRAIN_COCO_PATH
+    embedding_path=%EMBEDDING_COCO_PATH

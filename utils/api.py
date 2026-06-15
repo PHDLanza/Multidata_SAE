@@ -1,202 +1,21 @@
 import os
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-# os.environ["CUDA_VISIBLE_DEVICES"] = "4"
-os.environ["HF_HUB_CACHE"]="/data/lanza/hub"
 os.environ["SAE_DISABLE_TRITON"] = "0"
 os.environ["TOKENIZERS_PARALLELISM"]="false"
-os.environ["PATH"] += os.pathsep + "/sbin/"
-
 import torch
 import json
-
 from sparsify.sparsify.sparse_coder import SparseCoder as SAE
 from typing import Dict, List
-
 from torchvision.transforms.functional import to_pil_image
-
-
-
 from typing import Tuple
 from transformers import LlavaNextProcessor ,LlavaNextForConditionalGeneration
 from torch.utils.data import DataLoader,Dataset
-
-
-from utils.dataset import VQAXTrainDataset
+from utils.dataset import VQAXDataset
 from tqdm import tqdm
 import numpy as np
-
 from pathlib import Path
 import gin
 import glob
 from datasets import load_dataset
-
-@gin.configurable
-def coco_extract(vqa_dataset:VQAXTrainDataset,path_sae:Path,path_embedding:Path,id_loader=-1,device:torch.device='cuda:0'):
-    """
-    Extract sparse autoencoder features from a VQA dataset using the LLaVA-NeXT model.
-
-    Args:
-        vqa_dataset (VQAXTrainDataset): The VQA dataset to process.
-        
-        path_sae (Path): Path to the pre-trained sparse autoencoder.
-        path_embedding (Path): Directory where extracted embeddings will be saved.
-        id_loader (int, optional): Index of the data subset to process. Defaults all data subset, i.e. id_loader=-1.
-        device (torch.device): The device. Defaults to cuda:0.
-
-    Returns:
-        None. The function saves extracted features to a JSON file.
-    """
-    target_tensor = torch.tensor(range(5000), device=device)
-    
-    max_new_tokens=20
-    
-    vqa_dataset=VQAXTrainDataset()
-    if id_loader==-1:
-        train_loader=DataLoader(vqa_dataset, batch_size=1, shuffle=False, num_workers=4)
-        
-    else:
-        
-        sub_datasets=torch.utils.data.random_split(vqa_dataset,[0.16, 0.16, 0.16, 0.16, 0.16, 0.20],torch.Generator().manual_seed(42))
-        # Use the first subset for this run (you can change the index to use different subsets)        
-        train_loader=DataLoader(sub_datasets[id_loader], batch_size=1, shuffle=False, num_workers=4)
-
-
-    
-    processor = LlavaNextProcessor.from_pretrained("llava-hf/llama3-llava-next-8b-hf")
-    model = LlavaNextForConditionalGeneration.from_pretrained("llava-hf/llama3-llava-next-8b-hf",attn_implementation="sdpa", torch_dtype=torch.float16, device_map="auto")
-    model.generation_config.pad_token_id = processor.tokenizer.pad_token_id
-    model.eval()
-    system="""You are a Visual Question Answering (VQA) model. Your task is to analyze an input image and answer a question about it. """
-    
-    
-    
-    pre_prompt="""
-    Your answer must always be a single word, without explanations, punctuation, or additional text.
-
-    If the question requires a yes/no answer, respond with "yes" or "no" only. If the question asks for an object, color, action, or any other descriptor, respond with the most relevant single word.
-    
-    Examples:
-
-        Question: What color is the car?
-        Answer: Red
-
-        Question: What animal is in the picture?
-        Answer: Dog
-
-        Question: Is the person smiling?
-        Answer: Yes
-
-        Question: What is the person doing?
-        Answer: Running
-
-        Question: What object is on the table?
-        Answer: Laptop
-
-        Question: What is the weather like?
-        Answer: Sunny
-
-        Question: How many apples are there?
-        Answer: Three
-
-        Question: What shape is the object?
-        Answer: Circle
-        
-    QUESTION:
-    {}
-            
-    """
-    actual_conversation=[
-                        {
-                        "role": "system",
-                        "content": [
-                            {"type": "text", "text": system},
-                            
-                            ],
-                        },
-                    ]
-    actual_conversation=initialize_llava_vqa(model=model,processor=processor,actual_conversation=actual_conversation)
-    hooked_res = {"hidden_states": None}
-    
-   
-
-    sae = SAE.load_from_hub(path_sae, hookpoint="model.layers.24").to(device)
-    sae.eval()
-
-    def forward_hook(model, input, output):
-        if hooked_res["hidden_states"] is not None:
-            hooked_res["hidden_states"].append(output)
-        else:
-            hooked_res["hidden_states"] = [output]
-        return output
-
-
-    # Register the hook
-    hook_gen=model.language_model.model.layers[24].register_forward_hook(forward_hook)
-    
-    #Tag used to identify the image and the text
-    image_tag=processor(text="<image>")
-    image_tag=image_tag["input_ids"][0][1]
-    
-    results_dict = {
-    }
-    with torch.no_grad():
-        for batch in tqdm(train_loader, desc="Extraction embedding", leave=True):
-            img,question,_,_,_,id_sample=batch
-            id_sample=id_sample[0]
-            images = [to_pil_image(img.squeeze(0))]
-            prompt=pre_prompt.format(question[0])
-            actual_conversation,text_output,output_ids=model_generation(model,actual_conversation,
-                            prompt,processor,images,max_new_tokens=max_new_tokens)
-        
-              # Extract the hidden states linked with the text output, after the processing of the image (first hidden_state chunk) and before the 
-            # end of token message (last hidden_state chunk)
-          
-            hidden_state_textual = [state[0] for state, _ in hooked_res["hidden_states"][1:-1]]
-            
-            hidden_state_textual = torch.cat(hidden_state_textual, dim=0)
-            
-            # Extract the hidden states linked with the image + question input (first hidden_state chunk)
-            hidden_state_visual = hooked_res["hidden_states"][0][0][0]
-            
-            indices_image_tags=torch.where(output_ids == image_tag)[0][:576]
-            
-            # Apply sparse autoencoder to the hidden state
-            result_sae_visual = sae(hidden_state_visual[indices_image_tags].to(sae.device))
-            
-            result_sae_textual = sae(hidden_state_textual.to(sae.device))
-            actual_conversation.pop()
-            
-            actual_conversation.pop()
-
-            hooked_res = {"hidden_states": None}
-
-            latent_indices_visual,latent_acts_visual =extract_matching_neuron_values_indices(result_sae_visual.latent_indices.to(device),
-                                                                                             result_sae_visual.latent_acts.to(device),target_tensor) 
-            
-            latent_indices_textual,latent_acts_textual =extract_matching_neuron_values_indices(result_sae_textual.latent_indices.to(device),
-                                                                                         result_sae_textual.latent_acts.to(device),target_tensor) 
-            
-            results_dict[id_sample]={
-                "visual_features":
-                    {"latent_acts":latent_acts_visual,
-                    "latent_indices":latent_indices_visual},
-                "textual_features": 
-                    {"latent_acts":latent_acts_textual,
-                    "latent_indices":latent_indices_textual,
-                    "final_output":text_output}
-                }
-
-            del result_sae_visual,result_sae_textual,batch,output_ids,images
-            torch.cuda.empty_cache()
-            
-    hook_gen.remove()
-
-   
-    
-    with open(path_embedding+"coco_block_"+str(id_loader)+".json", "a") as f:
-        json.dump(results_dict, f, indent=4)
-
-
     
 def model_generation(model:LlavaNextForConditionalGeneration,actual_conversation:Dict,
                    content:str,processor:LlavaNextProcessor,images:List=None,max_new_tokens=20)->tuple[Dict,str]:
@@ -218,9 +37,8 @@ def model_generation(model:LlavaNextForConditionalGeneration,actual_conversation
                     - String containing the generated text output
                     - Raw model output tokens
     """ 
- 
-    if images is not None:
-
+    
+    if images:
         
         conversation_with_images=[
                     {
@@ -236,9 +54,10 @@ def model_generation(model:LlavaNextForConditionalGeneration,actual_conversation
         actual_conversation.extend(conversation_with_images)
         
         prompt = processor.apply_chat_template(actual_conversation, add_generation_prompt=True)
+        
         inputs = processor(images=images, text=prompt, return_tensors="pt")
         
-        with torch.no_grad():
+        with torch.inference_mode():
             output = model.generate(
                 input_ids=inputs["input_ids"].to(model.device),
                 pixel_values=inputs["pixel_values"].to(model.device),
@@ -264,7 +83,7 @@ def model_generation(model:LlavaNextForConditionalGeneration,actual_conversation
         inputs = processor( text=prompt, return_tensors="pt").to(model.device)
         
         inputs_embeds =  model.get_input_embeddings()(inputs["input_ids"])
-        with torch.no_grad():
+        with torch.inference_mode():
             output = model.generate(
                 inputs_embeds= inputs_embeds,
                 max_new_tokens=max_new_tokens
@@ -294,8 +113,7 @@ def model_generation(model:LlavaNextForConditionalGeneration,actual_conversation
 
     return actual_conversation,text_output,output[0]
 
-
-def initialize_llava_vqa(model:LlavaNextForConditionalGeneration,actual_conversation:Dict,processor:LlavaNextProcessor,max_new_tokens=20):
+def initialize_llava(model:LlavaNextForConditionalGeneration,actual_conversation:Dict,processor:LlavaNextProcessor,max_new_tokens=20):
     """
     Initialize a conversation for the LLaVA model to extract features from the VQA.
 
@@ -309,13 +127,13 @@ def initialize_llava_vqa(model:LlavaNextForConditionalGeneration,actual_conversa
         Dict: Updated conversation with system instructions and initial response
     """   
 
-   
+    # Initializate the prompt
     prompt = processor.apply_chat_template(actual_conversation, add_generation_prompt=True)
-
+    
     inputs = processor( text=prompt, return_tensors="pt").to(model.device)
     inputs_embeds =  model.get_input_embeddings()(inputs["input_ids"])
-    
-    with torch.no_grad():
+    #Generate the response
+    with torch.inference_mode():
         output = model.generate(
             inputs_embeds=inputs_embeds,
             max_new_tokens=max_new_tokens
@@ -332,11 +150,11 @@ def initialize_llava_vqa(model:LlavaNextForConditionalGeneration,actual_conversa
                 ],
         },
     ]
+    # Add the response to the conversation
     actual_conversation.extend(tmp_conversation)
     
 
     return actual_conversation
-
 
 def extract_matching_neuron_values_indices(indices_tensor: torch.tensor, acts_tensor:torch.tensor, target_tensor: torch.tensor):
     """
@@ -371,17 +189,17 @@ def extract_matching_neuron_values_indices(indices_tensor: torch.tensor, acts_te
     
     return matching_indices, matching_values
   
-
 @gin.configurable
-def create_average_activation_dictionary_coco(path_embedding:Path)->None:
+def create_average_activation_dictionary(embedding_file_path:Path,embedding_folder_path,modality:str)->None:
     """Create a dictionary mapping neurons to their activation statistics in VQA samples.
 
     For each analyzed neuron, store information about which VQA samples activated it,
     including the average activation value and count of image patches involved.
 
     Args:
-        path_embedding (Path):Path containing VQA task results
-
+        embedding_file_path (Path):Path containing embedding results
+        embedding_path_path (Path):Path to the embedding folder
+        modality (str, optional): Modality to process ('visual' or 'textual').
     Returns:
         None. Saves results to 'average_activation_dictionary.json' with structure:
         {
@@ -392,65 +210,18 @@ def create_average_activation_dictionary_coco(path_embedding:Path)->None:
             ...
         }
     """
-    neuron_activation_stats_dict_image = {str(i): {} for i in range(5000)}
-    neuron_activation_stats_dict_text = {str(i): {} for i in range(5000)}
-    
-    json_files = glob.glob(os.path.join(path_embedding, 'coco_block_*.json'))
-    
-    for file_path in tqdm(json_files, desc="Average activations of SAE's neurons", leave=True):
-    
-        res=json.load(open(file_path))
-        for key, value in res.items():
-            neuron_activation_stats_dict_image=average_values_indices(value['visual_features']['latent_indices'],value['visual_features']['latent_acts'],neuron_activation_stats_dict_image,key)  
-            neuron_activation_stats_dict_text=average_values_indices(value['textual_features']['latent_indices'],value['textual_features']['latent_acts'],neuron_activation_stats_dict_text,key)  
 
+    neuron_activation_stats_dict = {str(i): {} for i in range(5000)}
 
-    with open(path_embedding+"average_activation_dictionary_textual.json", "a") as f:
-        json.dump(neuron_activation_stats_dict_text, f, indent=4)
+    res=json.load(open(embedding_file_path))
+    for key, value in res.items():
+       
+        neuron_activation_stats_dict=average_values_indices(value[modality+'_features']['latent_indices'],value[modality+'_features']['latent_acts'],neuron_activation_stats_dict,key)  
+       
+    with open(embedding_folder_path+"average_activation_"+modality+"_dictionary.json", "a") as f:
+            json.dump(neuron_activation_stats_dict, f, indent=4)
+    
         
-    with open(path_embedding+"average_activation_dictionary_visual.json", "a") as f:
-        json.dump(neuron_activation_stats_dict_image, f, indent=4)
-        
-    
-@gin.configurable
-def create_average_activation_dictionary_llava_next(path_embedding:Path)->None:
-    """Create a dictionary mapping neurons to their activation statistics in llava samples.
-
-    For each analyzed neuron, store information about which llava samples activated it,
-    including the average activation value and count of image patches involved.
-
-    Args:
-        path_embedding (Path): Path containing llava results
-
-    Returns:
-        None. Saves results to 'average_activation_dictionary.json' with structure:
-        {
-            neuron_id: {
-                llava_id: [activation_average, patch_count],
-                ...
-            },
-            ...
-        }
-    """
-    neuron_activation_stats_dict_visual = {str(i): {} for i in range(5000)}
-    neuron_activation_stats_dict_textual = {str(i): {} for i in range(5000)}
-    
-    json_files = glob.glob(os.path.join(path_embedding, 'llava_15_block_*.json'))
-    
-    for file_path in tqdm(json_files, desc="Average activations of SAE's neurons", leave=True):
-    
-        res=json.load(open(file_path))
-        for key, value in res.items():
-            neuron_activation_stats_dict_visual=average_values_indices(value['visual_features']['latent_indices'],value['visual_features']['latent_acts'],neuron_activation_stats_dict_visual,key)  
-            neuron_activation_stats_dict_textual=average_values_indices(value['textual_features']['latent_indices'],value['textual_features']['latent_acts'],neuron_activation_stats_dict_textual,key)  
-
-
-    with open(path_embedding+"average_activation_dictionary_textual.json", "a") as f:
-        json.dump(neuron_activation_stats_dict_textual, f, indent=4)
-        
-    with open(path_embedding+"average_activation_dictionary_visual.json", "a") as f:
-        json.dump(neuron_activation_stats_dict_visual, f, indent=4)
-
 def average_values_indices(lists_indices: List[List[int]], lists_acts:List[List[int]],neuron_activation_stats_dict:dict,id_sample:str)->Dict:
 
     """Compute the averages activations values for all active neurons for each patch, or token generated, in a single image, or single text, and adding to 
@@ -505,32 +276,18 @@ def average_values_indices(lists_indices: List[List[int]], lists_acts:List[List[
 
     return neuron_activation_stats_dict
 @gin.configurable
-def llava_extract(path_embedding,path_dataset,id_loader=0,device=torch.device('cuda:0')):  
+def llava_extract(embedding_path,dataset_path,layer:str='24',device=torch.device('cuda:0')):  
     """
     Extract sparse autoencoder (SAE) features from the LLaVA-NeXT model for both image and text modalities.
 
     Args:
-        path_embedding (str): Directory where the extracted feature JSON files will be saved.
-        path_dataset (str): Directory for caching/loading the LLaVA-NeXT dataset.
-        id_loader (int, optional): Index of the data subset to process. Defaults to 0.
+        embedding_path (str): Directory where the extracted feature JSON files will be saved.
+        dataset_path (str): Directory for caching/loading the LLaVA-NeXT dataset.
+        layer (str, optional): Model layer to extract features from. Defaults to '24'.
         device (torch.device, optional): Device to run computations on. Defaults to cuda:0.
 
     Output:
-        None. Saves results to a JSON file with the following structure:
-            {
-                "sample_id": {
-                    "visual_features": {
-                        "latent_acts": list or None,
-                        "latent_indices": list or None
-                    },
-                    "textual_features": {
-                        "latent_acts": list or None,
-                        "latent_indices": list or None,
-                        "final_output": str or None
-                    }
-                },
-                ...
-            }
+        None. Saves results to a JSON file 
 
     Notes:
         - Processes the LLaVA-NeXT-Data dataset (15% of the training split).
@@ -539,20 +296,10 @@ def llava_extract(path_embedding,path_dataset,id_loader=0,device=torch.device('c
         - Handles both image and text inputs, extracting features for each.
         - Results are saved incrementally to avoid data loss during processing.
     """
+    # The first 5000 neurons
     target_tensor = torch.tensor(range(5000), device=device)
   
-    full_dataset = load_dataset("lmms-lab/LLaVA-NeXT-Data", split="train[:15%]", cache_dir=path_dataset, num_proc=10)
-    
-    factor=5
-    subset_size = len(full_dataset) // factor
-    
-    data_subsets = [
-        full_dataset.select(range(i * subset_size, (i + 1) * subset_size))
-        for i in range(factor)
-    ]
-    # Use the first subset for this run (you can change the index to use different subsets)
-    data = data_subsets[id_loader]
-    
+    data=load_dataset("lmms-lab/LLaVA-NeXT-Data", split="train[:15%]", cache_dir=dataset_path, num_proc=10)
     processor = LlavaNextProcessor.from_pretrained("llava-hf/llama3-llava-next-8b-hf")
     model = LlavaNextForConditionalGeneration.from_pretrained("llava-hf/llama3-llava-next-8b-hf",attn_implementation="sdpa", torch_dtype=torch.float16, device_map="auto")
     model.generation_config.pad_token_id = processor.tokenizer.pad_token_id
@@ -569,18 +316,19 @@ def llava_extract(path_embedding,path_dataset,id_loader=0,device=torch.device('c
 
 
     # Register the hook
-    hook_gen=model.language_model.model.layers[24].register_forward_hook(forward_hook)
+    hook_gen=model.language_model.model.layers[int(layer)].register_forward_hook(forward_hook)
     #Tag used to identify the image and the text
     image_tag=processor(text="<image>")
     image_tag=image_tag["input_ids"][0][1]
-
-    sae = SAE.load_from_hub("lmms-lab/llama3-llava-next-8b-hf-sae-131k", hookpoint="model.layers.24").to(device)
+    hookpoint="model.layers."+str(layer)
+    sae = SAE.load_from_hub("lmms-lab/llama3-llava-next-8b-hf-sae-131k", hookpoint=hookpoint).to(device)
     sae.eval()
+    
     results_dict={}
     
     for batch in tqdm(data,desc='Extract from LlaVA'):
         hooked_res = {"hidden_states": None} 
-        with torch.no_grad():
+        with torch.inference_mode():
             
             id_dictionary=batch['id']
             text=batch['conversations'][1]['value']
@@ -605,7 +353,7 @@ def llava_extract(path_embedding,path_dataset,id_loader=0,device=torch.device('c
                     inputs = processor( images=img,text=prompt, return_tensors="pt").to(model.device)
                     
                     
-                    output = model(
+                    _ = model(
                         
                             input_ids=inputs["input_ids"].to(model.device),
                             pixel_values=inputs["pixel_values"].to(model.device),
@@ -651,13 +399,156 @@ def llava_extract(path_embedding,path_dataset,id_loader=0,device=torch.device('c
                     "latent_indices":latent_indices_textual,
                     "final_output":text}
                 }
+          
             
             
             torch.cuda.empty_cache()
 
-            
-    with open(path_embedding+"llava_15_block_"+str(id_loader)+".json", "a") as f:
+    hook_gen.remove()
+    with open(embedding_path+"llava_embeddings.json", "a") as f:
         json.dump(results_dict, f, indent=4)
+@gin.configurable
+def coco_extract(vqa_dataset:VQAXDataset,path_sae:Path,path_embedding:Path,device:torch.device='cuda:0'):
+    """
+    Extract sparse autoencoder features from a VQA dataset using the LLaVA-NeXT model.
+
+    Args:
+        vqa_dataset (VQAXTrainDataset): VQA dataset to process.
+        
+        path_sae (Path): Path to the pre-trained sparse autoencoder.
+        path_embedding (Path): Path to the save folder.
+        id_loader (int, optional): Index of the data subset to process. Defaults all data subset, i.e. id_loader=-1.
+        device (torch.device): The cuda device. Defaults to cuda:0.
+
+    Returns:
+        None. The function saves extracted features to a JSON file.
+    """
+    
+    
+    #Donwload the dataset and partition it
+    vqa_dataset=VQAXDataset()
+    
+
+    # All in once single run
+    train_loader=DataLoader(vqa_dataset, batch_size=1, shuffle=False, num_workers=4)
+        
+   
+
+    # Load SAE and LLaVA models
+    sae = SAE.load_from_hub(path_sae, hookpoint="model.layers.24").to(device)
+    sae.eval()
+    
+    processor = LlavaNextProcessor.from_pretrained("llava-hf/llama3-llava-next-8b-hf")
+    model = LlavaNextForConditionalGeneration.from_pretrained("llava-hf/llama3-llava-next-8b-hf",attn_implementation="sdpa", torch_dtype=torch.float16, device_map="auto")
+    model.generation_config.pad_token_id = processor.tokenizer.pad_token_id
+    model.eval()
+    #Prepare the LLaVA model, initializing the prompt and the system prompt
+  
+    
+    
+   
+
+    max_new_tokens=20
+    # Standard, always extract the first 5000 neurons from the SAE
+    target_tensor = torch.tensor(range(5000), device=device)
+
+    # Creation of the hook
+    def forward_hook(model, input, output):
+        if hooked_res["hidden_states"] is not None:
+            hooked_res["hidden_states"].append(output)
+        else:
+            hooked_res["hidden_states"] = [output]
+        return output
+
+
+    # Register the hook
+    hook_gen=model.language_model.model.layers[24].register_forward_hook(forward_hook)
+    
+    #Tag used to identify the image and the text
+    image_tag=processor(text="<image>")
+    image_tag=image_tag["input_ids"][0][1]
+    
+    results_dict = {
+    }
+    with torch.inference_mode():
+        hooked_res = {"hidden_states": None}
+        for batch in tqdm(train_loader, desc="Extraction embedding", leave=True):
+            img,question,_,_,_,id_sample=batch
+            id_sample=id_sample[0]
+            images = to_pil_image(img.squeeze(0))
+            
+
+        
+
+            img_conversation=[
+                        {
+                            "role": "system",
+                            "content": [
+                                {"type": "image"},
+                                {"type": "text", "text":question},
+                            ],
+                        },
+                ]
+            
+            prompt = processor.apply_chat_template(img_conversation, add_generation_prompt=True)     
+            
+            inputs = processor( images=images,text=prompt, return_tensors="pt").to(model.device)
+            
+            
+            _ = model(
+                
+                    input_ids=inputs["input_ids"].to(model.device),
+                    pixel_values=inputs["pixel_values"].to(model.device),
+                    image_sizes=inputs["image_sizes"].to(model.device),
+                    attention_mask=inputs["attention_mask"].to(model.device)
+                    )
+              # Extract the hidden states linked with the text output, after the processing of the image (first hidden_state chunk) and before the 
+
+          
+            hidden_state_textual = [state[0] for state, _ in hooked_res["hidden_states"][1:-1]]
+            
+            hidden_state_textual = torch.cat(hidden_state_textual, dim=0)
+            
+            # Extract the hidden states linked with the image + question input (first hidden_state chunk)
+            hidden_state_visual = hooked_res["hidden_states"][0][0][0]
+            
+            
+            indices_image_tags=torch.where(output_ids == image_tag)[0][:576]
+            
+            # Apply sparse autoencoder to the hidden state
+            result_sae_visual = sae(hidden_state_visual[indices_image_tags].to(sae.device))
+            result_sae_textual = sae(hidden_state_textual.to(sae.device))
+            #Pop the last two messages, question and answer to re-use actual_conversation
+         
+            #Clean the hook response
+            hooked_res = {"hidden_states": None}
+
+            latent_indices_visual,latent_acts_visual =extract_matching_neuron_values_indices(result_sae_visual.latent_indices.to(device),
+                                                                                             result_sae_visual.latent_acts.to(device),target_tensor) 
+            
+            latent_indices_textual,latent_acts_textual =extract_matching_neuron_values_indices(result_sae_textual.latent_indices.to(device),
+                                                                                         result_sae_textual.latent_acts.to(device),target_tensor) 
+            
+            results_dict[id_sample]={
+                "visual_features":
+                    {"latent_acts":latent_acts_visual,
+                    "latent_indices":latent_indices_visual},
+                "textual_features": 
+                    {"latent_acts":latent_acts_textual,
+                    "latent_indices":latent_indices_textual,
+                    }
+                }
+
+            del result_sae_visual,result_sae_textual,batch,output_ids,images
+            torch.cuda.empty_cache()
+            
+    hook_gen.remove()
+    
+   
+ 
+    with open(path_embedding+"coco_embeddings.json", "a") as f:
+        json.dump(results_dict, f, indent=4)
+
 def compute_fvu(path_file:str)->None:
     """Compute the mean, variance, and number of elements from values in a JSON file.
     
@@ -679,51 +570,51 @@ def compute_fvu(path_file:str)->None:
     print(f"Num elements text: {len(values)}")
     return mean,variance,len(values)
 
-def create_dictionary_neurons(path_embedding:Path, list_neurons:List[int],modality:str='visual')->None:
+def create_neuron_top5_dictionary(embedding_path:Path, neuron_list:List[int],modality:str='visual')->None:
         """
         Create a dictionary mapping each neuron to its top-5 most activated samples.
 
         Args:
-            path_embedding (Path): Path to the folder where embeddings are saved.
-            list_neurons (List[int]): List of neuron indices to process.
+            embedding_path (Path): Path to the folder where embeddings are saved.
+            neuron_list (List[int]): List of neuron indices to process.
             modality (str): Modality type, either 'visual' or 'textual':Default.
 
         Returns:
             Path: Path to the saved dictionary JSON file.
         """
         # Determine which JSON files to load based on the folder name
-        if 'coco' in path_embedding:
-            json_pattern = 'coco_block_*.json'
+        if 'coco' in embedding_path:
+            json_pattern = 'coco_embbeddings*.json'
         else:
-            json_pattern = 'llava_15_block_*.json'
-        json_files = glob.glob(os.path.join(path_embedding, json_pattern))
+            json_pattern = 'llava_embeddings*.json'
         
-        # Create a combined dictionary for all files
-        combined_data = {}
-
-        # Read and combine all json files
-        for file_path in json_files:
-            with open(file_path, 'r') as f:
-                data = json.load(f)
-                combined_data.update(data)
-
         dictionary_neurons={}
-        name_dictionary='dictionary_neurons_'+modality+'.json'
-        average_activation_dictionary = json.load(open(path_embedding+'average_activation_dictionary_'+modality+'.json'))
-        for neuron in tqdm(list_neurons,desc='Sorting activations and creating '+name_dictionary+' file'):
+        name_dictionary='neuron_top5_'+modality+'_dictionary.json'
+        #Check if the dictionary with all the average neuron activations of exists  
+        avg_act_dict_path = os.path.join(embedding_path, f'average_activation__{modality}_dictionary.json')
+        if not os.path.exists(avg_act_dict_path):
+            #create the average neruon activations dictionary for the modality
+            
+            create_average_activation_dictionary(embedding_path=embedding_path,embedding_file_path=embedding_path,modality=modality)
+
+
+        embedding_file_path = os.path.join(embedding_path, json_pattern)
+        data=json.load(open(embedding_file_path))
+        average_activation_dictionary = json.load(open(avg_act_dict_path))
+        for neuron in tqdm(neuron_list,desc='Sorting activations and creating '+name_dictionary+' file'):
             # Sort by activation value (descending)
             sorted_list = sorted(average_activation_dictionary[str(neuron)].items(), key=lambda x: x[1][1], reverse=True)
             # Take the top 5 activated samples
             top_5_samples=[sample_id[0] for sample_id in sorted_list[0:5]]
 
-            dictionary_neurons[neuron]={sample_id:combined_data[sample_id] for sample_id in top_5_samples}
+            dictionary_neurons[neuron]={sample_id:data[sample_id] for sample_id in top_5_samples}
             
-        result_path=os.path.join(path_embedding, name_dictionary)   
+        result_path=os.path.join(embedding_path, name_dictionary)   
         with open(result_path, 'a') as f:
             json.dump(dictionary_neurons, f)
         return result_path
 
-def unite_dictionaries(path_dictionaries_neuron:Path,modality:str='visual')->None:
+def unite_dictionaries(dictionaries_neuron_path:Path,modality:str='visual')->None:
 
     """Unites multiple dictionary files into a single complete dictionary file.
         Execute this function after generate hypotheses for each neuron in SAE (thorugh generate_hypotheses)  
@@ -742,9 +633,9 @@ def unite_dictionaries(path_dictionaries_neuron:Path,modality:str='visual')->Non
     
     """    
     
-    files=glob.glob(path_dictionaries_neuron+'dictionary_hypo_*'+modality+'_.json')
+    files=glob.glob(dictionaries_neuron_path+'dictionary_hypo_*'+modality+'_.json')
     dictionary={}
-    for el in files:
+    for el in tqdm(files, desc='Unite the dictionaries'):
         
         num=el.split('_')[-3]
         index_start=int(num)*1000
@@ -756,6 +647,6 @@ def unite_dictionaries(path_dictionaries_neuron:Path,modality:str='visual')->Non
         else:
             dictionary.update(filtered_dict)
     sorted_dictionary = dict(sorted(dictionary.items(), key=lambda x: int(x[0])))
-    with open(path_dictionaries_neuron+'dictionary_hypotheses_complete_'+modality+'.json', 'a') as f:
+    with open(dictionaries_neuron_path+'dictionary_hypotheses_complete_'+modality+'.json', 'a') as f:
         json.dump(sorted_dictionary, f, indent=4)
-        
+    

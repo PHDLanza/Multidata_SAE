@@ -1,11 +1,6 @@
 import os
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["HF_HUB_CACHE"]="/data/lanza/hub"
 os.environ["SAE_DISABLE_TRITON"] = "0"
 os.environ["TOKENIZERS_PARALLELISM"]="false"
-os.environ["PATH"] += os.pathsep + "/sbin/"
-from io import BytesIO
-import base64
 import torch
 import json
 from sparsify.sparsify.sparse_coder import SparseCoder as SAE
@@ -15,33 +10,18 @@ from tqdm import tqdm
 import numpy as np
 import copy
 from pathlib import Path
-
 from llava.mm_utils import  process_images, tokenizer_image_token
 from utils.utils_image import reconstruct_image, create_image_patches
-from utils.api  import create_dictionary_neurons
+from utils.api  import create_neuron_top5_dictionary
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
 from llava.conversation import conv_templates
 from PIL import Image
 from utils.utils_image import reconstruct_image, create_image_patches
-
 import gin
-from transformers import LlavaNextProcessor 
 from datasets import load_dataset
 from llava.model.builder import load_pretrained_model
-def take(id_loader, iterable):
-    "Return one fifth of items from the iterable based on id_loader (0-4)"
-    # Convert iterable to list to get length
-    items = list(iterable)
-    total_len = len(items)
-    set_size = total_len // 5
-    
-    # Calculate start and end indices for the requested set
-    start_idx = id_loader * set_size
-    end_idx = start_idx + set_size if id_loader < 4 else total_len
-    
-    return items[start_idx:end_idx]
+from utils.utils_prompt import GUIDELINES_VISUAL_GENERATION, GUIDELINES_TEXTUAL_GENERATION
 
-    
 def prompt_routine(list_texts:List,modality:str='visual'):
     """
     Prepares a prompt for the Llava-Next routine to extract shared concepts from a list of texts and images.
@@ -54,43 +34,9 @@ def prompt_routine(list_texts:List,modality:str='visual'):
     """ 
     if modality=='visual':
     
-        GUIDELINES = """ 
-            [REQUIREMENTS]
-                Focus only on the highlighted region in each image. If no region is highlighted or if the highlighted region is minimal (e.g., a few bright spots), ignore the image.
-            
-                Identify common visual patterns, objects, or concepts in the activated regions. For example, note if highlighted areas show consistent structures, such as mesh patterns or similar objects.\
-            
-            [GUIDELINES]
-
-            1.Consider Text Context: While maintaining primary focus on the highlighted regions in images, you may marginally consider the associated text (questions and answers) to support or refine your visual observations. 
-            However, the final concept should be predominantly based on visual patterns.
-            
-            2.Concise Description Only: Provide a short, direct description of the common features within the highlighted regions. Avoid any interpretive language—simply state what you see, such as “mesh-like structures” or “actions related to joy or happiness”
-            
-            3. Describe Only the Highlighted Regions: Generate captions solely based on the highlighted regions. If no meaningful pattern is visible, or if only a few scattered spots are highlighted,
-                output: \"Concept:  `No visual concept`\"
-                
-          
-        """
+        GUIDELINES = GUIDELINES_VISUAL_GENERATION
     elif modality=='textual':
-        GUIDELINES=""" 
-            [REQUIREMENTS]
-            Focus only on the text content provided with each example. If the text is missing, irrelevant, or extremely minimal (e.g., a few unrelated words), ignore the text.
-
-            Identify textual pattern common themes, objects, or concepts mentioned across the text snippets. Pay special attention to any word in each text between parentheses , this word should be treated as the most important cue for concept identification.
-
-        [GUIDELINES]
-
-         
-
-
-            1.Concise Description Only: Provide a short, direct description of the common concept emerging from the texts. Avoid speculation or abstract interpretation—simply state what is explicitly or implicitly repeated, especially in relation to the words in parentheses (e.g., "Description of vehicle," "Cooking actions," "Chinese characters").
-            
-            2.If no clear concept emerges from the texts (e.g., if they are too diverse or vague),  write:  \"Concept:  `No textual concept`\"
-            
-            
-  
-            """
+        GUIDELINES= GUIDELINES_TEXTUAL_GENERATION
 
 
     GUIDELINES += """\n\n"""
@@ -105,16 +51,14 @@ def prompt_routine(list_texts:List,modality:str='visual'):
     return [GUIDELINES]
      
 @gin.configurable
-def generate_visual_hypotheses_coco(dataset_path:Path,embedding_path:Path, dictionary_neurons_path:Path,labels_path:Path,id_loader:int=0)->None:
+def generate_visual_hypotheses_coco(dataset_path:Path,embedding_path:Path,labels_path:Path)->None:
     """
     Generate possibles hypotheses of concept for each neuron saved in the df_neuron variables
 
     Args:
         dataset_path (Path): path to folder where is saved the dataset  
-        dictionary_neurons_path (Path): path to folder where the dictionary with the outputs of the backbone is saved 
         embedding_path (Path): path to folder where the latent activations of the SAE are saved 
         labels_path (Path): path to folder were the labels are collected
-        device (torch.device, optional): name of the device. Defaults to 'cpu'.
     Result:
         For each neuron in df_neurons, the function engender a txt file with the LlaVa prompt and besides and a summary.json 
         with a short version of each of all of them.
@@ -123,10 +67,12 @@ def generate_visual_hypotheses_coco(dataset_path:Path,embedding_path:Path, dicti
 
     """    
     modality='visual'
-    if not os.path.exists(dictionary_neurons_path):
+    save_result_path =Path(embedding_path+'/'+modality+'hypothesis_dictionary.json')
+    neuron_top5_visual_dictionary_path=embedding_path+'/neuron_top5_visual_dictionary.json'
+    if not os.path.exists(neuron_top5_visual_dictionary_path):
         neuron_list=range(5000)
-        dictionary_neurons_path=create_dictionary_neurons(embedding_path,neuron_list,modality=modality)
-        # dictionary_neurons_path=create_dictionary_neurons_llava_next(embedding_path,list_neurons)
+        neuron_top5_visual_dictionary_path=create_neuron_top5_dictionary(embedding_path,neuron_list,modality=modality)
+        # neuron_output_dictionary_path=create_neuron_top5_dictionary_llava_next(embedding_path,list_neurons)
         
        
     
@@ -142,11 +88,13 @@ def generate_visual_hypotheses_coco(dataset_path:Path,embedding_path:Path, dicti
     overwrite_config = {}
     overwrite_config["image_aspect_ratio"] = "pad"
     llava_model_args["overwrite_config"] = overwrite_config
-        
-    # tokenizer, model, image_processor, _ = load_pretrained_model(pretrained, None, model_name, device_map='auto', **llava_model_args)
-    tokenizer, model, image_processor, _ = load_pretrained_model(pretrained, None, model_name, device_map='auto', **llava_model_args,load_4bit=True)
     
-    # tokenizer, model, image_processor, _ = load_pretrained_model(pretrained, None, model_name, device_map='auto', **llava_model_args)
+    tokenizer, model, image_processor, _ = load_pretrained_model(pretrained, None, model_name, device_map='auto', **llava_model_args)
+    
+    # If only one A100 or H100 is available, load the model in 4-bit
+    # tokenizer, model, image_processor, _ = load_pretrained_model(pretrained, None, model_name, device_map='auto', **llava_model_args,load_4bit=True)
+    
+
 
     # Used to retrive the question and the image_id
 
@@ -160,10 +108,10 @@ def generate_visual_hypotheses_coco(dataset_path:Path,embedding_path:Path, dicti
 
     df_label=pd.DataFrame.from_dict(average_activation_dictionary)
     
-    dictionary_neurons=json.load(open(dictionary_neurons_path,'r'))
-    dictionary_hypo={str(i): [] for i in range(5000)}
+    neuron_output_dictionary=json.load(open(neuron_top5_visual_dictionary_path,'r'))
+    hypothesis_dictionary={str(i): [] for i in range(5000)}
 
-    path_hypo =Path(embedding_path+'dictionary_hypo_'+str(id_loader)+'_'+modality+'_.json')
+   
 
     
     conv_template = "qwen_1_5"
@@ -173,9 +121,9 @@ def generate_visual_hypotheses_coco(dataset_path:Path,embedding_path:Path, dicti
     conv.system=system
     
     actual_conversation=conv
-    portion_dictionary_neurons=take(id_loader, dictionary_neurons.items())
     
-    for neuron_number,batch in tqdm(portion_dictionary_neurons,desc=' Generate the Image Hypotheses  ' ,total=len(portion_dictionary_neurons),leave=False):
+    
+    for neuron_number,batch in tqdm(neuron_output_dictionary,desc=' Generate the Visual Hypotheses' ,total=len(neuron_output_dictionary),leave=False):
     
         ids_list=batch.keys()   
         #Used to memorize which images are used to derive the hypothesis
@@ -252,22 +200,20 @@ def generate_visual_hypotheses_coco(dataset_path:Path,embedding_path:Path, dicti
                 actual_conversation.messages.pop()
 
               
-                dictionary_hypo[neuron_number]=text_outputs[0]
+                hypothesis_dictionary[neuron_number]=text_outputs[0]
         
-    with open(path_hypo, 'w') as json_file:
-        json.dump(dictionary_hypo, json_file, indent=4)
+    with open(save_result_path, 'w') as json_file:
+        json.dump(hypothesis_dictionary, json_file, indent=4)
 
 @gin.configurable
-def generate_textual_hypotheses_coco(dataset_path:Path,embedding_path:Path, dictionary_neurons_path:Path,labels_path:Path,id_loader:int=0)->None:
+def generate_textual_hypotheses_coco(dataset_path:Path,embedding_path:Path,labels_path:Path)->None:
     """
     Generate possibles hypotheses of concept for each neuron saved in the df_neuron variables
 
     Args:
         dataset_path (Path): path to folder where is saved the dataset  
-        dictionary_neurons_path (Path): path to folder where the dictionary with the outputs of the backbone is saved 
         embedding_path (Path): path to folder where the latent activations of the SAE are saved 
         labels_path (Path): path to folder were the labels are collected
-        device (torch.device, optional): name of the device. Defaults to 'cpu'.
         
     Result:
         For each neuron in df_neurons, the function engender a txt file with the LlaVa prompt and besides and a summary.json 
@@ -277,9 +223,11 @@ def generate_textual_hypotheses_coco(dataset_path:Path,embedding_path:Path, dict
 
     """    
     modality='textual'
-    if not os.path.exists(dictionary_neurons_path):
+    save_result_path =Path(embedding_path+'dictionary_hypo_'+modality+'_.json')
+    neuron_top5_textual_dictionary_path=embedding_path+'/neuron_top5_textual_dictionary.json'
+    if not os.path.exists(neuron_top5_textual_dictionary_path):
         neuron_list=range(5000)
-        dictionary_neurons_path=create_dictionary_neurons(embedding_path,neuron_list,modality=modality)
+        neuron_top5_textual_dictionary_path=create_neuron_top5_dictionary(embedding_path,neuron_list,modality=modality)
       
         
        
@@ -297,9 +245,11 @@ def generate_textual_hypotheses_coco(dataset_path:Path,embedding_path:Path, dict
     overwrite_config["image_aspect_ratio"] = "pad"
   
     llava_model_args["overwrite_config"] = overwrite_config
-    tokenizer, model, image_processor, _ = load_pretrained_model(pretrained, None, model_name, device_map='auto', **llava_model_args,load_4bit=True)
     
-    # tokenizer, model, image_processor, _ = load_pretrained_model(pretrained, None, model_name, device_map='auto', **llava_model_args)
+    # If only one A100 or H100 is available, load the model in 4-bit
+    # tokenizer, model, image_processor, _ = load_pretrained_model(pretrained, None, model_name, device_map='auto', **llava_model_args,load_4bit=True)
+    
+    tokenizer, model, image_processor, _ = load_pretrained_model(pretrained, None, model_name, device_map='auto', **llava_model_args)
 
     # Used to retrive the question and the image_id
 
@@ -313,22 +263,21 @@ def generate_textual_hypotheses_coco(dataset_path:Path,embedding_path:Path, dict
 
     df_label=pd.DataFrame.from_dict(average_activation_dictionary)
     
-    dictionary_neurons=json.load(open(dictionary_neurons_path,'r'))
-    dictionary_hypo={str(i): [] for i in range(5000)}
+    neuron_output_dictionary=json.load(open(neuron_top5_textual_dictionary_path,'r'))
+    hypothesis_dictionary={str(i): [] for i in range(5000)}
 
-    path_hypo =Path(embedding_path+'dictionary_hypo_'+str(id_loader)+'_'+modality+'_.json')
-    
     conv_template = "qwen_1_5"
     system="You are a meticulous AI researcher conducting an important investigation into a certain neuron in a vision language model. Your task is to analyze the neuron and provide an explanation that thoroughly encapsulates its behavior."
     conv = copy.deepcopy(conv_templates[conv_template])
 
     conv.system=system
-    portion_dictionary_neurons=take(id_loader, dictionary_neurons.items())
+    
+
     
     actual_conversation=conv
     
   
-    for neuron_number,batch in tqdm(portion_dictionary_neurons,desc=' Generate the Text Hypotheses ' ,total=len(portion_dictionary_neurons),leave=False):
+    for neuron_number,batch in tqdm(neuron_output_dictionary,desc=' Generate the Textual Hypotheses' ,total=len(neuron_output_dictionary),leave=False):
         ids_list=batch.keys()   
         #Used to memorize which images are used to derive the hypothesis
         
@@ -385,26 +334,24 @@ def generate_textual_hypotheses_coco(dataset_path:Path,embedding_path:Path, dict
                 actual_conversation.messages.pop()
     
         
-                dictionary_hypo[neuron_number]=text_outputs[0]
+                hypothesis_dictionary[neuron_number]=text_outputs[0]
                 
         else:
-            dictionary_hypo[neuron_number]='No textual concept'
+            hypothesis_dictionary[neuron_number]='No textual concept'
             
  
-    with open(path_hypo, 'w') as json_file:
-        json.dump(dictionary_hypo, json_file, indent=4)
+    with open(save_result_path, 'w') as json_file:
+        json.dump(hypothesis_dictionary, json_file, indent=4)
 
 @gin.configurable
-def generate_visual_hypotheses_llava(dataset_path:Path,embedding_path:Path, dictionary_neurons_path:Path,id_loader:int=0)->None:
+def generate_visual_hypotheses_llava(dataset_path:Path,embedding_path:Path)->None:
     """
     Generate possibles hypotheses of concept for each neuron saved in the df_neuron variables
 
     Args:
         dataset_path (Path): path to folder where is saved the dataset  
-        dictionary_neurons_path (Path): path to folder where the dictionary with the outputs of the backbone is saved 
         embedding_path (Path): path to folder where the latent activations of the SAE are saved 
-        labels_path (Path): path to folder were the labels are collected
-        device (torch.device, optional): name of the device. Defaults to 'cpu'.
+        
     Result:
         For each neuron in df_neurons, the function engender a txt file with the LlaVa prompt and besides and a summary.json 
         with a short version of each of all of them.
@@ -413,16 +360,19 @@ def generate_visual_hypotheses_llava(dataset_path:Path,embedding_path:Path, dict
 
     """    
     modality='visual'
-    if not os.path.exists(dictionary_neurons_path):
+    save_result_path =Path(embedding_path+'/'+modality+'hypothesis_dictionary.json')
+    neuron_top5_visual_dictionary_path=embedding_path+'/neuron_top5_visual_dictionary.json'
+    if not os.path.exists(neuron_top5_visual_dictionary_path):
         neuron_list=range(5000)
-        dictionary_neurons_path=create_dictionary_neurons(embedding_path,neuron_list,modality=modality)
-        # dictionary_neurons_path=create_dictionary_neurons_llava_next(embedding_path,list_neurons)
+        print('create visual dictionary')
+        
+        neuron_top5_visual_dictionary_path=create_neuron_top5_dictionary(embedding_path,neuron_list,modality=modality)
         
 
     
     data = load_dataset("lmms-lab/LLaVA-NeXT-Data", split="train[:15%]", cache_dir=dataset_path, num_proc=10)
-    path_hypo =Path(embedding_path+'dictionary_hypo_'+str(id_loader)+'_'+modality+'_.json')
    
+
 
     # Load model
     pretrained = "lmms-lab/llava-onevision-qwen2-72b-ov"
@@ -430,10 +380,13 @@ def generate_visual_hypotheses_llava(dataset_path:Path,embedding_path:Path, dict
    
     llava_model_args = {
             "multimodal": True,
+            "attn_implementation": "sdpa"
+            
         }
     overwrite_config = {}
     overwrite_config["image_aspect_ratio"] = "pad"
     llava_model_args["overwrite_config"] = overwrite_config
+    # If only one A100 or H100 is available, load the model in 4-bit
     # tokenizer, model, image_processor, _ = load_pretrained_model(pretrained, None, model_name, device_map='auto', **llava_model_args,load_4bit=True)
     
     tokenizer, model, image_processor, _ = load_pretrained_model(pretrained, None, model_name, device_map='auto', **llava_model_args)
@@ -444,19 +397,18 @@ def generate_visual_hypotheses_llava(dataset_path:Path,embedding_path:Path, dict
     model.generation_config.top_p=None
     model.eval()
     
-    dictionary_neurons=json.load(open(dictionary_neurons_path,'r'))
-    dictionary_hypo={str(i): [] for i in range(5000)}
+    neuron_output_dictionary=json.load(open(neuron_top5_visual_dictionary_path,'r'))
+    hypothesis_dictionary={str(i): [] for i in range(5000)}
 
     conv_template = "qwen_1_5"
-    system="You are a meticulous AI researcher conducting an important investigation into a certain neuron in a vision language model. Your task is to analyze the neuron and provide an explanation that thoroughly encapsulates its behavior."
+    system="""You are a meticulous AI researcher conducting an important investigation into a certain neuron in a vision language model. Your task is to analyze the neuron and provide an explanation that thoroughly encapsulates its behavior."""
     conv = copy.deepcopy(conv_templates[conv_template])
     conv.system=system
     
 
-    portion_dictionary_neurons=take(id_loader, dictionary_neurons.items())
   
     needed_ids = set()
-    for _, batch in portion_dictionary_neurons:  # limit to 1000 for progress bar
+    for _, batch in neuron_output_dictionary:  
         needed_ids.update(map(int, batch.keys()))
     lookup = {}
     
@@ -470,7 +422,7 @@ def generate_visual_hypotheses_llava(dataset_path:Path,embedding_path:Path, dict
         if len(lookup) >= len(needed_ids):
             break
     
-    for neuron_number, batch in tqdm(portion_dictionary_neurons, desc="Generate Visual Hypotheses", total=1000, leave=False):
+    for neuron_number, batch in tqdm(neuron_output_dictionary, desc="Generate Visual Hypotheses", total=len(neuron_output_dictionary), leave=False):
         texts, masked_images = [], []
 
         for img_id_str, feats in batch.items():
@@ -541,25 +493,23 @@ def generate_visual_hypotheses_llava(dataset_path:Path,embedding_path:Path, dict
                 # print(text_outputs[0])
                 conv.messages.pop()
                 conv.messages.pop()
-                dictionary_hypo[neuron_number] = output
+                hypothesis_dictionary[neuron_number] = output
                 torch.cuda.empty_cache()
 
 
         
-    with open(path_hypo, 'a') as json_file:
-        json.dump(dictionary_hypo, json_file, indent=4)
+    with open(save_result_path, 'a') as json_file:
+        json.dump(hypothesis_dictionary, json_file, indent=4)
 
 @gin.configurable
-def generate_textual_hypotheses_llava(dataset_path:Path,embedding_path:Path, dictionary_neurons_path:Path,id_loader:int=0)->None:
+def generate_textual_hypotheses_llava(dataset_path:Path,embedding_path:Path)->None:
     """
     Generate possibles hypotheses of concept for each neuron saved in the df_neuron variables
 
     Args:
         dataset_path (Path): path to folder where is saved the dataset  
-        dictionary_neurons_path (Path): path to folder where the dictionary with the outputs of the backbone is saved 
         embedding_path (Path): path to folder where the latent activations of the SAE are saved 
-        labels_path (Path): path to folder were the labels are collected
-        device (torch.device, optional): name of the device. Defaults to 'cpu'.
+
         
     Result:
         For each neuron in df_neurons, the function engender a txt file with the LlaVa prompt and besides and a summary.json 
@@ -569,12 +519,14 @@ def generate_textual_hypotheses_llava(dataset_path:Path,embedding_path:Path, dic
 
     """    
     modality='textual'
-    if not os.path.exists(dictionary_neurons_path):
+    save_result_path =Path(embedding_path+'/'+modality+'hypothesis_dictionary.json')
+    neuron_top5_textual_dictionary_path=embedding_path+'/neuron_top5_textual_dictionary.json'
+    if not os.path.exists(neuron_top5_textual_dictionary_path):
         neuron_list=range(5000)
-        dictionary_neurons_path=create_dictionary_neurons(embedding_path,neuron_list,modality=modality)
+        print('create textual dictionary')
+        neuron_top5_textual_dictionary_path=create_neuron_top5_dictionary(embedding_path,neuron_list,modality=modality)
       
         
-       
      # train[:15%]
     data = load_dataset("lmms-lab/LLaVA-NeXT-Data", split="train[:15%]", cache_dir=dataset_path, num_proc=10)
     
@@ -584,15 +536,17 @@ def generate_textual_hypotheses_llava(dataset_path:Path,embedding_path:Path, dic
    
     llava_model_args = {
             "multimodal": True,
+            "attn_implementation": "sdpa",
         }
     overwrite_config = {}
     overwrite_config["image_aspect_ratio"] = "pad"
   
     llava_model_args["overwrite_config"] = overwrite_config
     
+    
+    # If only one A100 or H100 is available, load the model in 4-bit
+    # tokenizer, model, image_processor, _ = load_pretrained_model(pretrained, None, model_name, device_map='auto', **llava_model_args,load_4bit=True)
     tokenizer, model, image_processor, _ = load_pretrained_model(pretrained, None, model_name, device_map='auto', **llava_model_args)
-    # tokenizer, model, image_processor, _ = load_pretrained_model(pretrained, None, model_name, device_map='auto', **llava_model_args)
-
     # Used to retrive the question and the image_id
 
     model.generation_config.temperature=None
@@ -601,18 +555,18 @@ def generate_textual_hypotheses_llava(dataset_path:Path,embedding_path:Path, dic
     
 
     
-    dictionary_neurons=json.load(open(dictionary_neurons_path,'r'))
-    dictionary_hypo={str(i): [] for i in range(5000)}
+    neuron_output_dictionary=json.load(open(neuron_top5_textual_dictionary_path,'r'))
+    hypothesis_dictionary={str(i): [] for i in range(5000)}
 
-    path_hypo =Path(embedding_path+'dictionary_hypo_'+str(id_loader)+'_'+modality+'_.json')
+    
     
     conv_template = "qwen_1_5"
     system="You are a meticulous AI researcher conducting an important investigation into a certain neuron in a vision language model. Your task is to analyze the neuron and provide an explanation that thoroughly encapsulates its behavior."
-    portion_dictionary_neurons=take(id_loader, dictionary_neurons.items())
+    
     ##where to cut
   
     needed_ids = set()
-    for _, batch in portion_dictionary_neurons:  # limit to 1000 for progress bar
+    for _, batch in  neuron_output_dictionary:  
         needed_ids.update(map(int, batch.keys()))
     lookup = {}
     for example in tqdm(data, desc="Building lookup", leave=False):
@@ -627,61 +581,53 @@ def generate_textual_hypotheses_llava(dataset_path:Path,embedding_path:Path, dic
     conv = copy.deepcopy(conv_templates[conv_template])
 
     conv.system=system
-    
-    processor = LlavaNextProcessor.from_pretrained("llava-hf/llama3-llava-next-8b-hf")
-    
-    
-    for neuron_number,batch in tqdm(portion_dictionary_neurons,desc='Generate the Textual Hypotheses' ,total=1000,leave=False):
-        
-        #Used to memorize which images are used to derive the hypothesis
-        texts=[]
-        
-        
 
-        for id_sample_str, feats in batch.items():
-            id_sample = int(id_sample_str)
-            entry = lookup.get(id_sample)
+
+    
+    for neuron_number,batch in tqdm( neuron_output_dictionary,desc='Generate the Textual Hypotheses' ,total=len(neuron_output_dictionary),leave=False):
+        images=[]
+        texts=[]
+        for img_id_str, feats in batch.items():
+            img_id = int(img_id_str)
+            entry = lookup.get(img_id)
             
             if entry is None:
                 continue
-            
-            input_ids = processor(feats["textual_features"]["final_output"])
-            token_ids = input_ids["input_ids"][0]  # Assumes batch size = 1
 
-            # Decode all tokens at once for efficiency
-            decoded_tokens = processor.batch_decode([[tok_id] for tok_id in token_ids], skip_special_tokens=True)
-
-            final_string = []
-
-            for i, (token_str, neuron_ids) in enumerate(zip(decoded_tokens, feats["textual_features"]["latent_indices"])):
-                if i == 0:
-                    continue  # skip first token if needed
-
-                if int(neuron_number) in neuron_ids:
-                    final_string.append(f"[{token_str}]")
-                else:
-                    final_string.append(token_str)
-            
-            
             # build prompt text
             convo = entry["conversations"][0]["value"]
-            text_feat = ''.join(final_string)
-            
-            texts.append(convo.replace("<image>", " ").replace("\n", " ")+ f" {text_feat}")
+            text_feat = feats["text_features"]["final_output"]
+            texts.append(convo.replace("<image>", " ").replace("\n", " ")+ f" [ {text_feat} ]")
 
             # mask out patches
+            image = entry["image"]
            
+            
+            images.append(image)
+            
         
             # TypeError: color must be int or single-element tuple
-       
+            if texts:
+                if images:
+                
+                    image_tensors = process_images(images, image_processor, model.config)
+                    
+                    image_tensors = [_image.to(dtype=torch.float16, device=model.device) for _image in image_tensors]
+                    image_sizes = [image.size for image in images]
+
+                    # Prepare the template
+            
 
             # Prepare the template
+          
 
             questions= prompt_routine(texts,modality=modality)
                 
             with torch.inference_mode():
                 
-
+                image_tensors = process_images(images, image_processor, model.config)
+                image_tensors = [_image.to(dtype=torch.float16, device=model.device) for _image in image_tensors]
+               
                 conv.append_message(conv.roles[0], questions[0])
                 conv.append_message(conv.roles[1], None)
                 prompt = conv.get_prompt()
@@ -691,8 +637,8 @@ def generate_textual_hypotheses_llava(dataset_path:Path,embedding_path:Path, dic
                 output = model.generate(
 
                     input_ids,
-                    images=None,
-                    image_sizes=None,
+                    images=image_tensors,
+                    image_sizes=image_sizes,
                     do_sample=False,
                     
                     max_new_tokens=4096
@@ -701,12 +647,12 @@ def generate_textual_hypotheses_llava(dataset_path:Path,embedding_path:Path, dic
                 output = tokenizer.batch_decode(output, skip_special_tokens=True)[0]
                 conv.messages.pop()
                 conv.messages.pop()
-                dictionary_hypo[neuron_number] = output
+                hypothesis_dictionary[neuron_number] = output
                 torch.cuda.empty_cache()
                 
 
             
  
-    with open(path_hypo, 'w') as json_file:
-        json.dump(dictionary_hypo, json_file, indent=4)
+    with open(save_result_path, 'w') as json_file:
+        json.dump(hypothesis_dictionary, json_file, indent=4)
         

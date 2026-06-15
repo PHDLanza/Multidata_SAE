@@ -1,0 +1,19 @@
+
+include 'config_file/config_general.gin'
+
+
+fuz_score_llava:
+    embedding_path=%EMBEDDING_LLAVA_PATH
+    device=%DEVICE
+
+detection_score_llava:
+    embedding_path=%EMBEDDING_LLAVA_PATH
+    device=%DEVICE
+
+fuz_score_coco:
+    embedding_path=%EMBEDDING_COCO_PATH
+    device=%DEVICE
+
+detection_score_coco:
+    embedding_path=%EMBEDDING_COCO_PATH
+    device=%DEVICE

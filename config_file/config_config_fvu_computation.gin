@@ -1,9 +1,9 @@
-include '../config_file/config_general.gin'
+include 'config_file/config_general.gin'
 
 
 SAE_fvu:
-    path_dataset=%PATH_DATASET_LLAVA
+    dataset_path=%DATASET_LLAVA_PATH
+    
+    embedding_path=%EMBEDDING_LLAVA_PATH
     device=%DEVICE
-    path_embeddings=%PATH_EMBEDDING_LLAVA
-
 

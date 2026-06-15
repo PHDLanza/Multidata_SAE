@@ -1,31 +1,5 @@
+
 GUIDELINES_VISUAL_GENERATION= """ 
-            [REQUIREMENTS]
-
-            1. Focus only on the highlighted region in each image. If no region is highlighted or if the highlighted region is minimal (e.g., a few bright spots), ignore the image.
-            2. Identify common visual patterns, objects, or concepts in the activated regions. For example, note if highlighted areas show consistent structures, such as mesh patterns or similar objects.
-            
-            [GUIDELINES]
-            
-            1.You will receive a series of images and correlated texts, and you have to identify the shared concept between them.he images will be masked, so you will have to describe only on the visible portion of image to generate a concept.
-            These are samples taken from a Visual Question Answering dataset, so for each image there is a question and an answer.
-            
-            
-            2. Concise Description Only: Provide a short, direct description of the common features within the highlighted regions. Avoid any interpretive language—simply state what you see, such as “mesh-like structures” or “actions related to joy or happiness”. 
-            Concepts can be only visual concepts so related to the image, the text can be only used to guide the generation, such as if you see a series of images regarding a specific race of dog look also if the all texts, or part of them, mention the race dog.
-
-            
-            3. If no clear concept emerges from the images to any visual concept, for example if the pixels are too far sparse that cannot form any understandable figure, write: No visual concept 
-
-            [OUTPUT EXAMPLES]
-            - Concept: "A tennis racket"   
-        
-            - Concept: "No visual concept"   
-            
-            
-            
-            Remember,Write always only one Concept for the entire set of inputs
-        """
-GUIDELINES_VISUAL_GENERATION_LLAVA= """ 
             [REQUIREMENTS]
                 Focus only on the highlighted region in each image. If no region is highlighted or if the highlighted region is minimal (e.g., a few bright spots), ignore the image.
             
@@ -41,35 +15,9 @@ GUIDELINES_VISUAL_GENERATION_LLAVA= """
             3. Describe Only the Highlighted Regions: Generate captions solely based on the highlighted regions. If no meaningful pattern is visible, or if only a few scattered spots are highlighted,
                 output: \"Concept:  `No visual concept`\ 
             """
+
 GUIDELINES_TEXTUAL_GENERATION=""" 
-            [REQUIREMENTS]
-
-                Focus only on the text content provided with each example. If the text is missing, irrelevant, or extremely minimal (e.g., a few unrelated words), ignore that example.
-
-                Identify common themes, objects, or concepts mentioned across the text snippets. Pay special attention to any highlighted word in each text—this word should be treated as the most important cue for concept identification.
-
-            [GUIDELINES]
-
-                1.You will receive a series of text snippets, sometimes accompanied by images. Only use the text, and in particular the word between parentheses, to identify the shared concept. Images should not be considered in your analysis.
-                These examples are derived from a Visual Question Answering dataset, so each text is in the form of a question or an answer.
-
-                2.Concise Description Only: Provide a short, direct description of the common concept emerging from the texts. Avoid speculation or abstract interpretation—simply state what is explicitly or implicitly repeated, especially in relation to the highlighted words (e.g., “vehicles,” “cooking actions,” “types of animals”).
-                Use the image only for reference if absolutely necessary; the main analysis must be text-driven, with words in parentheses as priority.
-
-                3.If no clear concept emerges from the texts (e.g., if they are too diverse or vague), write: No textual concept
-
-            [OUTPUT EXAMPLES]
-
-                Concept: "A tennis match"
-
-                Concept: "Descriptions of birds"
-
-                Concept: "No textual concept"
-                
-            Remember,Write always only one Concept for the entire set of inputs
-            """
-GUIDELINES_TEXTUAL_GENERATION_LLAVA=""" 
-            [REQUIREMENTS]
+        [REQUIREMENTS]
                Focus only on the text content provided with each example. If the text is missing, irrelevant, or extremely minimal (e.g., a few unrelated words), ignore the text.
 
             Identify common themes, objects, or concepts mentioned across the text snippets. Pay special attention to any highlighted word in each text—this word should be treated as the most important cue for concept identification.
@@ -234,3 +182,60 @@ Text examples:
 
 {examples}
 """
+
+
+
+# GUIDELINES_VISUAL_GENERATION_OLD= """ 
+#             [REQUIREMENTS]
+
+#             1. Focus only on the highlighted region in each image. If no region is highlighted or if the highlighted region is minimal (e.g., a few bright spots), ignore the image.
+#             2. Identify common visual patterns, objects, or concepts in the activated regions. For example, note if highlighted areas show consistent structures, such as mesh patterns or similar objects.
+            
+#             [GUIDELINES]
+            
+#             1.You will receive a series of images and correlated texts, and you have to identify the shared concept between them.he images will be masked, so you will have to describe only on the visible portion of image to generate a concept.
+#             These are samples taken from a Visual Question Answering dataset, so for each image there is a question and an answer.
+            
+            
+#             2. Concise Description Only: Provide a short, direct description of the common features within the highlighted regions. Avoid any interpretive language—simply state what you see, such as “mesh-like structures” or “actions related to joy or happiness”. 
+#             Concepts can be only visual concepts so related to the image, the text can be only used to guide the generation, such as if you see a series of images regarding a specific race of dog look also if the all texts, or part of them, mention the race dog.
+
+            
+#             3. If no clear concept emerges from the images to any visual concept, for example if the pixels are too far sparse that cannot form any understandable figure, write: No visual concept 
+
+#             [OUTPUT EXAMPLES]
+#             - Concept: "A tennis racket"   
+        
+#             - Concept: "No visual concept"   
+            
+            
+            
+#             Remember,Write always only one Concept for the entire set of inputs
+#         """
+# GUIDELINES_TEXTUAL_GENERATION_OLD=""" 
+#             [REQUIREMENTS]
+
+#                 Focus only on the text content provided with each example. If the text is missing, irrelevant, or extremely minimal (e.g., a few unrelated words), ignore that example.
+
+#                 Identify common themes, objects, or concepts mentioned across the text snippets. Pay special attention to any highlighted word in each text—this word should be treated as the most important cue for concept identification.
+
+#             [GUIDELINES]
+
+#                 1.You will receive a series of text snippets, sometimes accompanied by images. Only use the text, and in particular the word between parentheses, to identify the shared concept. Images should not be considered in your analysis.
+#                 These examples are derived from a Visual Question Answering dataset, so each text is in the form of a question or an answer.
+
+#                 2.Concise Description Only: Provide a short, direct description of the common concept emerging from the texts. Avoid speculation or abstract interpretation—simply state what is explicitly or implicitly repeated, especially in relation to the highlighted words (e.g., “vehicles,” “cooking actions,” “types of animals”).
+#                 Use the image only for reference if absolutely necessary; the main analysis must be text-driven, with words in parentheses as priority.
+
+#                 3.If no clear concept emerges from the texts (e.g., if they are too diverse or vague), write: No textual concept
+
+#             [OUTPUT EXAMPLES]
+
+#                 Concept: "A tennis match"
+
+#                 Concept: "Descriptions of birds"
+
+#                 Concept: "No textual concept"
+                
+#             Remember,Write always only one Concept for the entire set of inputs
+#             """

@@ -1,5 +1,4 @@
 import numpy as np
-import cv2
 from PIL import Image, ImageFilter
 
 def create_image_patches(image_object: str | Image.Image, grid_size=24):

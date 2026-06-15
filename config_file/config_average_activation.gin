@@ -1,6 +1,0 @@
-include '../config_file/config_general.gin'
-
-create_average_activation_dictionary:
-    path_embedding=%PATH_EMBEDDING_COCO
-create_average_activation_dictionary_llava_next:
-    path_embedding=%PATH_EMBEDDING_LLAVA

@@ -1,0 +1,33 @@
+
+include 'config_file/config_general.gin'
+#if you want process the coco information switch %EMBEDDING_LLAVA_PATH with %EMBEDDING_COCO_PATH
+eval_visual_hypotheses_CLIP:
+    embedding_path=%EMBEDDING_LLAVA_PATH
+    dataset_path=%DATASET_LLAVA_PATH
+    neuron_top5_visual_dictionary_path=%EMBEDDING_LLAVA_PATH 
+
+    
+    device=%DEVICE
+
+eval_visual_hypotheses_ALIGN:
+    embedding_path=%EMBEDDING_LLAVA_PATH
+    dataset_path=%DATASET_LLAVA_PATH
+    neuron_top5_visual_dictionary_path=%EMBEDDING_LLAVA_PATH
+   
+    device=%DEVICE
+
+eval_textual_hypotheses_CLIP:
+    embedding_path=%EMBEDDING_LLAVA_PATH
+    dataset_path=%DATASET_LLAVA_PATH
+    neuron_top5_textual_dictionary_path=%EMBEDDING_LLAVA_PATH
+   
+    device=%DEVICE
+
+
+eval_textual_hypotheses_ALIGN:
+    embedding_path=%EMBEDDING_LLAVA_PATH
+    dataset_path=%DATASET_LLAVA_PATH
+    neuron_top5_textual_dictionary_path=%EMBEDDING_LLAVA_PATH 
+
+    
+    device=%DEVICE
